@@ -43,8 +43,8 @@ class Plugin(BasePlugin):
         )
         self.app = app
         self.client = OpenAI(
-            #I know is not secure to put the API key here, but for the sake of the example I will leave it here
-            api_key= "***REMOVED***"
+            #replace with your api key
+            api_key= "X"
         )
 
     def send_message_to_chatgpt(self, message):
