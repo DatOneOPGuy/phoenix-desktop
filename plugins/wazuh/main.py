@@ -1,7 +1,7 @@
 """SIEM Agent Plugin (PyQt6).
 
 Faithful PyQt6 port of the original CustomTkinter "Endpoint" screen. Installs
-and manages the SIEM (Wazuh) agent from the Resistine Desktop sidebar.
+and manages the SIEM (Wazuh) agent from the Phoenix Desktop sidebar.
 
 The screen is state-driven from a single bordered "Surface" card:
 
@@ -160,7 +160,7 @@ class Plugin(BasePlugin):
             order=5,
             name="Endpoint",
             status=None,
-            description="Install and manage the SIEM agent.",
+            description="Monitor this device with the Phoenix endpoint agent.",
             supported_systems=["Darwin", "Linux", "Windows"],
             translations={"US": "Endpoint", "ES": "Endpoint", "FR": "Endpoint"},
             icon_light_path=os.path.join(_PLUGIN_DIR, "add_user_light.png"),
@@ -402,7 +402,7 @@ class Plugin(BasePlugin):
         self._paragraph(
             body,
             "The SIEM agent collects security telemetry from this machine "
-            "and reports to the Resistine SIEM dashboard.",
+            "and reports to the Phoenix SIEM dashboard.",
             _COLOR_MUTED,
         )
         body.addSpacing(8)

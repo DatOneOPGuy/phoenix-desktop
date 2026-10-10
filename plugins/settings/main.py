@@ -70,7 +70,7 @@ class Plugin(BasePlugin):
         super().__init__(
             id="010", version="2025.01.01", order=1020, name="Settings",
             status=None,
-            description="This plugin allows you to configure your account settings.",
+            description="Your account, appearance and updates.",
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Settings", "ES": "Configuracion",
                           "FR": "Paramètres"},
@@ -124,8 +124,13 @@ class Plugin(BasePlugin):
         # (red, destructive); logged out -> Log In (primary blue, action).
         logged_in = settings.get("auth", "logged_in", False)
         email = settings.get("auth", "email", None)
-        lay.addWidget(self._muted(
-            f"Email: {email}" if email else "Not signed in"))
+        user_id = settings.get("auth", "user_id", None)
+        if user_id:
+            lay.addWidget(self._muted(f"Phoenix account: {user_id}"))
+        if email:
+            lay.addWidget(self._muted(f"Email: {email}"))
+        elif not user_id:
+            lay.addWidget(self._muted("Not signed in"))
 
         if logged_in:
             self.logout_button = QPushButton("Log Out")
@@ -145,7 +150,7 @@ class Plugin(BasePlugin):
         else:
             self.logout_button = QPushButton("Log In")
             self.logout_button.setStyleSheet(
-                "background-color: #0D5394; color: white; border: none;"
+                "background-color: #1E6FD9; color: white; border: none;"
                 "border-radius: 8px; padding: 8px 16px; font-weight: 600;")
             self.logout_button.clicked.connect(self._handle_login)
         self.logout_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -220,9 +225,9 @@ class Plugin(BasePlugin):
     def _uninstall_card(self) -> QWidget:
         card, lay = self._card("Uninstall")
         lay.addWidget(self._muted(
-            "Permanently remove Resistine and all associated data from this "
+            "Permanently remove Phoenix and all associated data from this "
             "computer."))
-        self.uninstall_button = QPushButton("Uninstall Resistine")
+        self.uninstall_button = QPushButton("Uninstall Phoenix")
         self.uninstall_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.uninstall_button.setStyleSheet(
             "background-color: #DC3545; color: white; border: none;"
@@ -346,8 +351,8 @@ class Plugin(BasePlugin):
 
     def _handle_uninstall(self):
         confirmed = QMessageBox.question(
-            self.app, "Uninstall Resistine",
-            "Are you sure you want to completely uninstall Resistine?\n\n"
+            self.app, "Uninstall Phoenix",
+            "Are you sure you want to completely uninstall Phoenix?\n\n"
             "This will remove all VPN configurations, application data, and the "
             "application itself.\n\nThis action cannot be undone.",
         ) == QMessageBox.StandardButton.Yes
@@ -419,6 +424,7 @@ class Plugin(BasePlugin):
             return
         self._disconnect_vpn()
         self._remove_wazuh_agent()
+        self._revoke_session()
         self._clear_user_data()
         try:
             self.app.show_login()
@@ -490,6 +496,15 @@ class Plugin(BasePlugin):
                 logger.warning("Wazuh agent removal reported failure")
         except Exception as e:
             logger.warning(f"Wazuh agent removal on logout failed: {e}")
+
+    def _revoke_session(self):
+        # End the MAS session too, so the device disappears from the
+        # account's session list. Best effort: offline logout still works.
+        try:
+            from plugins.login.oidc import revoke
+            revoke()
+        except Exception as e:
+            logger.warning(f"Session revoke on logout failed: {e}")
 
     def _clear_user_data(self):
         import platform as plat

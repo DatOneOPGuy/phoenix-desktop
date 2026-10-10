@@ -48,11 +48,11 @@ class UpdateDialog(QDialog):
         self._layout.setContentsMargins(24, 24, 24, 24)
         self._layout.setSpacing(12)
 
-        title = QLabel("A new version of Resistine is available")
+        title = QLabel("A new version of Phoenix is available")
         title.setObjectName("H2")
         self._layout.addWidget(title)
         self._layout.addWidget(QLabel(
-            f"Resistine {new_version} is now available — you have "
+            f"Phoenix {new_version} is now available — you have "
             f"{current_version}. Would you like to install it now?"))
 
         notes = QTextBrowser()

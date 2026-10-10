@@ -19,11 +19,12 @@ import sys
 from gui.dialogs import CTkPasswordDialog
 from utils.i18n import get_text
 from utils.logger import logger
+from utils.settings import get_config_dir
 
 # Removed standard logging setup
 
 # Keychain Constants
-KEYS_FILE_PATH = os.path.expanduser("~/.config/resistine/keys.json")
+KEYS_FILE_PATH = os.path.join(get_config_dir(), "keys.json")
 
 
 def get_writable_wireguard_dir():

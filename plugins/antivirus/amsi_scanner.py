@@ -56,7 +56,7 @@ def _ensure_initialized() -> bool:
 
         try:
             hr = _amsi.AmsiInitialize(
-                c_wchar_p("Resistine"), byref(_context),
+                c_wchar_p("Phoenix"), byref(_context),
             )
             if hr != 0:
                 logger.warning(f"AMSI: AmsiInitialize failed (HRESULT 0x{hr:08X})")

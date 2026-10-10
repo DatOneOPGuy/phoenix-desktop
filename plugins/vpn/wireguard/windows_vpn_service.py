@@ -1,5 +1,5 @@
 """
-Windows Service to manage WireGuard VPN tunnels for Resistine VPN.
+Windows Service to manage WireGuard VPN tunnels for Phoenix VPN.
 Authors: Merhawi
 Copyright (c) Resistine 2025
 This service listens for commands from the GUI and manages WireGuard tunnels
@@ -29,8 +29,8 @@ import shutil
 # ---------------- Configuration ----------------
 
 SERVICE_NAME         = "ResistineVPN"
-SERVICE_DISPLAY_NAME = "Resistine VPN Service"
-SERVICE_DESCRIPTION  = "Manages WireGuard tunnels for Resistine VPN"
+SERVICE_DISPLAY_NAME = "Phoenix VPN Service"
+SERVICE_DESCRIPTION  = "Manages WireGuard tunnels for Phoenix VPN"
 
 SERVICE_HOST = "127.0.0.1"
 SERVICE_PORT = 51888
@@ -147,7 +147,7 @@ def _get_log_file() -> str:
         return programdata_log
     except PermissionError:
         appdata_log = os.path.join(
-            os.environ.get("APPDATA", ""), "Resistine", "vpn_service.log"
+            os.environ.get("APPDATA", ""), "Phoenix", "vpn_service.log"
         )
         os.makedirs(os.path.dirname(appdata_log), exist_ok=True)
         return appdata_log

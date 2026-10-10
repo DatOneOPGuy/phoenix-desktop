@@ -1,4 +1,4 @@
-"""Antivirus plugin for Resistine Desktop (PyQt6).
+"""Antivirus plugin for Phoenix Desktop (PyQt6).
 
 Faithful PyQt6 port of the original CustomTkinter screen. Provides
 file/directory scanning, real-time protection status, signature updates,
@@ -97,7 +97,7 @@ _PS_AUMID = (
 
 
 def _send_notification_windows(title: str, body: str):
-    """Windows 10/11: native Action Center toast with Resistine logo.
+    """Windows 10/11: native Action Center toast with Phoenix logo.
 
     Toast XML is written to a temp file and read by PowerShell via
     Get-Content -Raw rather than interpolated into the script. The previous
@@ -603,7 +603,7 @@ class Plugin(BasePlugin):
                     "it from your distribution's package manager."
                     if is_linux else
                     "ClamAV binaries were not found.\n"
-                    "Reinstall Resistine or run the build script "
+                    "Reinstall Phoenix or run the build script "
                     "to set up antivirus protection."
                 ),
                 "action": (
@@ -671,9 +671,9 @@ class Plugin(BasePlugin):
                 "network_timeout": "Download timed out. "
                                    "Check your internet connection.",
                 "certs_missing": "Certificate verification failed. "
-                                 "Try reinstalling Resistine.",
+                                 "Try reinstalling Phoenix.",
                 "binary_missing": "ClamAV binaries not found. "
-                                  "Reinstall Resistine.",
+                                  "Reinstall Phoenix.",
                 "partial_download": "Download was incomplete. "
                                     "Tap Retry to try again.",
                 "freshclam_failed": "Signature download failed. "
@@ -759,7 +759,7 @@ class Plugin(BasePlugin):
             return {
                 "kind": "warn", "title": "Full Disk Access Required",
                 "subtitle": (
-                    "Resistine needs Full Disk Access to monitor files "
+                    "Phoenix needs Full Disk Access to monitor files "
                     "in real time. Grant access in System Settings "
                     "› Privacy & Security › Full Disk Access."
                 ),
@@ -783,7 +783,7 @@ class Plugin(BasePlugin):
                     "Enable systemd to start real-time protection."
                     if is_linux else
                     "On-demand scanning available. "
-                    "Install Resistine.app for real-time protection."
+                    "Install the Phoenix app for real-time protection."
                 )
             ),
             "action": (
@@ -859,7 +859,7 @@ class Plugin(BasePlugin):
             resources = t.get("resources", [])
             path = resources[0] if resources else "unknown location"
             _send_notification(
-                "Resistine — Threat Blocked",
+                "Phoenix — Threat Blocked",
                 f"{name} was blocked at {os.path.basename(path)}",
             )
             try:
@@ -935,7 +935,7 @@ class Plugin(BasePlugin):
         from utils import notifications
         basename = os.path.basename(filepath)
         notifications.send(
-            "Resistine — Threat Blocked",
+            "Phoenix — Threat Blocked",
             f"Malware detected: {signature}\n{basename}",
             urgency="critical",
         )
@@ -943,7 +943,7 @@ class Plugin(BasePlugin):
     def _handle_rtd_summary_on_main(self, count: int):
         from utils import notifications
         notifications.send(
-            "Resistine — Threat Blocked",
+            "Phoenix — Threat Blocked",
             f"{count} additional threat(s) detected",
             urgency="critical",
         )
@@ -1535,7 +1535,7 @@ class Plugin(BasePlugin):
                 f"Threats found: {result.infected}")
             try:
                 notifications.send(
-                    "Resistine — Threats Detected",
+                    "Phoenix — Threats Detected",
                     f"{result.infected} infected file(s) found during scan.",
                     urgency="critical",
                 )

@@ -1,9 +1,9 @@
-"""Resistine AI Chat plugin (PyQt6).
+"""Phoenix AI Chat plugin (PyQt6).
 
 Faithful PyQt6 port of the original CustomTkinter chat screen. Reproduces the
 same regions 1:1:
 
-  * Top bar  -- hamburger menu toggle (left), "Resistine AI" title (centre),
+  * Top bar  -- hamburger menu toggle (left), "Phoenix AI" title (centre),
                 "+" New Chat button (right).
   * History drawer -- a collapsible left panel listing saved sessions with
                 select + delete, slid open/closed by the hamburger, dimming the
@@ -14,7 +14,7 @@ same regions 1:1:
   * Welcome screen -- centred greeting + "TRY ASKING" suggestion chips when the
                 conversation is empty (or an "API key required" panel when no
                 client is configured).
-  * Input bar -- rounded entry "Message Resistine AI..." + a send button that
+  * Input bar -- rounded entry "Message Phoenix AI..." + a send button that
                 shows "↑" and toggles to a red "■" stop glyph while streaming.
 
 The streaming controller, history manager and markdown utilities are reused
@@ -27,7 +27,6 @@ Licensed under the GNU General Public License v2 or later
 from __future__ import annotations
 
 import os
-import random
 
 from PyQt6.QtCore import (
     QEasingCurve,
@@ -59,7 +58,7 @@ from plugins.base_plugin import BasePlugin
 from plugins.chat.history import ChatHistoryManager
 from plugins.chat.qt_markdown import markdown_to_html, stylesheet
 from plugins.chat.streaming import StreamController
-from plugins.chat.suggestions import SUGGESTION_POOL
+from plugins.chat.suggestions import pick_suggestions
 from utils import settings
 from utils.logger import logger
 
@@ -91,12 +90,13 @@ _ARRIVE_MS = 200
 def _tls_verify() -> str | bool:
     """httpx ``verify`` value for the HTTPS chat endpoint.
 
-    The dashboard serves a leaf-only certificate (no intermediate) signed
-    by the internal Resistine root CA, so the default certifi store cannot
-    validate it. Resolution order: RESISTINE_CA_BUNDLE env var, a
-    ``certs/resistine-rootCA.pem`` override in the config dir, then the
-    root CA bundled with the app. If all are missing (shouldn't happen --
-    the bundled cert ships in resources/), fall back to standard
+    The dashboard's certificate is signed either by the internal Resistine
+    root CA (leaf-only, no intermediate) or by the Cloudflare Origin CA
+    (*.phoenix.exposed). Neither is in certifi, so the app ships both roots
+    in ``resources/certs/chat-ca-bundle.pem``. Resolution order:
+    RESISTINE_CA_BUNDLE env var, a ``certs/resistine-rootCA.pem`` override in
+    the config dir, then the bundled CA file. If all are missing (shouldn't
+    happen -- the bundle ships in resources/), fall back to standard
     verification rather than disabling it.
     """
     ca = os.environ.get("RESISTINE_CA_BUNDLE")
@@ -107,14 +107,14 @@ def _tls_verify() -> str | bool:
     if os.path.isfile(ca):
         return ca
     from utils.functions import get_resource_path
-    ca = get_resource_path(
-        os.path.join("resources", "certs", "resistine-rootCA.pem"))
-    if os.path.isfile(ca):
-        return ca
+    for name in ("chat-ca-bundle.pem", "resistine-rootCA.pem"):
+        ca = get_resource_path(os.path.join("resources", "certs", name))
+        if os.path.isfile(ca):
+            return ca
     return True
 
-RESISTINE_BLUE = "#0D5394"
-_ACCENT_HOVER = "#1565B0"
+BRAND_BLUE = "#1E6FD9"
+_ACCENT_HOVER = "#185CB5"
 _STOP_RED = "#EF4444"
 _STOP_RED_HOVER = "#DC2626"
 
@@ -385,6 +385,7 @@ class _Bubble(QFrame):
             self._raw_text = text
             try:
                 self._label.setText(text)
+                self._fit_user_width()
             except RuntimeError:
                 pass
             return
@@ -403,11 +404,27 @@ class _Bubble(QFrame):
         if text and text != "…":
             self._has_content = True  # enables copy + hover reveal
 
+    def _fit_user_width(self) -> None:
+        """Size the user pill to its text, up to ``_max_width``.
+
+        A word-wrapped QLabel's size hint is a narrow heuristic width, not
+        the room available, so short and medium messages wrapped into a
+        thin column. Pin the width to the longest line (plus a little
+        slack for rounding), capped by the bubble's max width; longer text
+        then wraps at the full width.
+        """
+        self._label.ensurePolished()  # stylesheet font (14px) before measuring
+        fm = self._label.fontMetrics()
+        lines = self._raw_text.splitlines() or [""]
+        natural = max(fm.horizontalAdvance(line) for line in lines) + 4
+        self._label.setFixedWidth(max(1, min(natural, self._max_width)))
+
     def set_max_width(self, max_width: int) -> None:
         self._max_width = max_width
         try:
             if self._is_user:
                 self._label.setMaximumWidth(max_width)
+                self._fit_user_width()
             else:
                 self._view.setFixedWidth(max_width)
                 self._fit_height()
@@ -549,7 +566,7 @@ class Plugin(BasePlugin):
     def __init__(self, app):
         super().__init__(
             id="002", version="2025.01.01", order=2, name="Chat", status=None,
-            description="This plugin allows you to chat with the AI assistant.",
+            description="Ask the Phoenix AI security assistant.",
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Chat", "ES": "Chat", "FR": "Chat"},
             icon_light_path=os.path.join(_ICON_DIR, "chat_light.png"),
@@ -587,30 +604,21 @@ class Plugin(BasePlugin):
     def check_status(self):
         if not self.client:
             return "Warning"
-        # Access gate: chat is only usable when VPN + agent are both active.
-        vpn_on, agent_on = self._chat_access_status()
-        return "OK" if (vpn_on and agent_on) else "Warning"
+        # Access gate: chat is only usable while the endpoint agent runs.
+        return "OK" if self._chat_access_status() else "Warning"
 
     @staticmethod
-    def _chat_access_status() -> tuple[bool, bool]:
-        """Return (vpn_connected, endpoint_agent_running) for the gate.
+    def _chat_access_status() -> bool:
+        """Return whether the endpoint (SIEM) agent is running.
 
-        The agent check is "running" (not merely "installed") so that
-        manually toggling the SIEM agent off re-locks chat.
+        The check is "running" (not merely "installed") so that manually
+        toggling the SIEM agent off re-locks chat. The VPN is not required.
         """
-        vpn_on = False
-        try:
-            from plugins.vpn.main import is_vpn_connected
-            vpn_on = bool(is_vpn_connected())
-        except Exception:
-            vpn_on = False
-        agent_on = False
         try:
             from plugins.wazuh.main import is_agent_running
-            agent_on = bool(is_agent_running())
+            return bool(is_agent_running())
         except Exception:
-            agent_on = False
-        return vpn_on, agent_on
+            return False
 
     def reinitialize_client(self, notify: bool = False):
         """Rebuild the OpenAI client from the current settings."""
@@ -656,15 +664,13 @@ class Plugin(BasePlugin):
     #  Screen construction
     # ===================================================================
     def create_main_screen(self):
-        # Access gate: chat is only available when the VPN is connected AND
-        # the SIEM/Endpoint agent is RUNNING. A QTimer poller re-checks while
-        # the screen is alive, so toggling the agent off or dropping the VPN
-        # snaps chat back to the locked screen — and turning them back on
-        # unlocks it — without navigating away and back.
-        vpn_on, agent_on = self._chat_access_status()
-        self._gate_unlocked = bool(vpn_on and agent_on)
+        # Access gate: chat is only available while the SIEM/Endpoint agent
+        # is RUNNING. A QTimer poller re-checks while the screen is alive, so
+        # toggling the agent off snaps chat back to the locked screen — and
+        # turning it back on unlocks it — without navigating away and back.
+        self._gate_unlocked = self._chat_access_status()
         if not self._gate_unlocked:
-            locked = self._build_locked_screen(vpn_on, agent_on)
+            locked = self._build_locked_screen()
             self._start_gate_poller(locked)
             self.second_frame = locked
             return locked
@@ -703,7 +709,7 @@ class Plugin(BasePlugin):
 
     # ---- Access gate -------------------------------------------------------
     def _start_gate_poller(self, owner: QWidget) -> None:
-        """Re-check the VPN+agent gate every few seconds while chat is shown.
+        """Re-check the agent gate every few seconds while chat is shown.
 
         The QTimer is parented to the screen widget, so it stops and is
         destroyed with the screen — no manual teardown needed.
@@ -712,8 +718,7 @@ class Plugin(BasePlugin):
         timer.setInterval(4000)
 
         def _tick():
-            vpn_on, agent_on = self._chat_access_status()
-            unlocked = bool(vpn_on and agent_on)
+            unlocked = self._chat_access_status()
             if unlocked == self._gate_unlocked:
                 return
             timer.stop()
@@ -733,13 +738,13 @@ class Plugin(BasePlugin):
         timer.start()
         self._gate_timer = timer
 
-    def _build_locked_screen(self, vpn_on: bool, agent_on: bool) -> QWidget:
+    def _build_locked_screen(self) -> QWidget:
         """Referral screen shown while the access gate is locked."""
         page = QWidget()
         lay = QVBoxLayout(page)
         lay.addStretch(1)
 
-        title = QLabel("Resistine AI is locked")
+        title = QLabel("Phoenix AI is locked")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet(
             f"font-size: 20px; font-weight: 700; "
@@ -748,7 +753,7 @@ class Plugin(BasePlugin):
         lay.addSpacing(8)
 
         sub = QLabel(
-            "Chat is available when your connection is protected.")
+            "Chat is available while the Endpoint agent is running.")
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sub.setStyleSheet(
             f"font-size: 14px; color: {theme.color('text_secondary')};")
@@ -756,19 +761,14 @@ class Plugin(BasePlugin):
         lay.addWidget(sub)
         lay.addSpacing(16)
 
-        for ok, txt in (
-            (vpn_on, "VPN connected"),
-            (agent_on, "Endpoint agent running"),
-        ):
-            row = QLabel(("✓  " if ok else "✗  ") + txt)
-            row.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            color = "#1E8E3E" if ok else "#C5221F"
-            row.setStyleSheet(f"font-size: 14px; color: {color};")
-            lay.addWidget(row)
+        row = QLabel("✗  Endpoint agent running")
+        row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        row.setStyleSheet("font-size: 14px; color: #C5221F;")
+        lay.addWidget(row)
 
         lay.addSpacing(16)
         hint = QLabel(
-            "Connect the VPN and start the Endpoint agent to unlock chat. "
+            "Start the Endpoint agent to unlock chat. "
             "This screen unlocks automatically.")
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hint.setWordWrap(True)
@@ -792,7 +792,7 @@ class Plugin(BasePlugin):
         lay.addWidget(self._toggle_btn)
 
         lay.addStretch(1)
-        title = QLabel("Resistine AI")
+        title = QLabel("Phoenix AI")
         title.setStyleSheet(
             f"font-size: 16px; font-weight: 700; "
             f"color: {theme.color('text_primary')}; background: transparent;")
@@ -898,7 +898,7 @@ class Plugin(BasePlugin):
         row.setSpacing(6)
 
         self.chat_entry = _ChatInput()
-        self.chat_entry.setPlaceholderText("Message Resistine AI...")
+        self.chat_entry.setPlaceholderText("Message Phoenix AI...")
         self.chat_entry.setStyleSheet(
             "QTextEdit { background: transparent; border: none; "
             "font-size: 15px; padding: 4px 8px; }")
@@ -958,7 +958,7 @@ class Plugin(BasePlugin):
             size, pad = 13, "0px"
         else:
             # Bigger, semi-bold arrow, nudged up 2px to optically centre it.
-            bg, hover, text = RESISTINE_BLUE, _ACCENT_HOVER, "↑"
+            bg, hover, text = BRAND_BLUE, _ACCENT_HOVER, "↑"
             size, pad = 20, "0px 0px 2px 0px"
         self.send_button.setText(text)
         self.send_button.setStyleSheet(
@@ -997,7 +997,7 @@ class Plugin(BasePlugin):
         new_btn = QPushButton("+ New")
         new_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         new_btn.setStyleSheet(
-            f"QPushButton {{ background-color: {RESISTINE_BLUE}; color: #fff; "
+            f"QPushButton {{ background-color: {BRAND_BLUE}; color: #fff; "
             f"border: none; border-radius: 7px; padding: 5px 10px; "
             f"font-size: 11px; font-weight: 700; }}"
             f"QPushButton:hover {{ background-color: {_ACCENT_HOVER}; }}")
@@ -1154,7 +1154,8 @@ class Plugin(BasePlugin):
             f"color: {theme.color('text_primary')}; background: transparent;")
         lay.addWidget(greeting)
 
-        subtitle = QLabel("Ask me anything about cybersecurity")
+        subtitle = QLabel(
+            "Ask about your devices, alerts, vulnerabilities and compliance")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle.setStyleSheet(
             f"font-size: 14px; color: {theme.color('text_secondary')}; "
@@ -1164,13 +1165,12 @@ class Plugin(BasePlugin):
 
         section = QLabel("TRY ASKING")
         section.setStyleSheet(
-            f"font-size: 11px; font-weight: 700; color: {RESISTINE_BLUE}; "
+            f"font-size: 11px; font-weight: 700; color: {BRAND_BLUE}; "
             f"background: transparent;")
         lay.addWidget(section)
         lay.addSpacing(8)
 
-        for suggestion in random.sample(
-                SUGGESTION_POOL, min(4, len(SUGGESTION_POOL))):
+        for suggestion in pick_suggestions(4):
             lay.addWidget(self._suggestion_chip(suggestion))
         return w
 
@@ -1648,7 +1648,7 @@ class Plugin(BasePlugin):
             btn.setEnabled(False)
         else:
             entry.setEnabled(True)
-            entry.setPlaceholderText("Message Resistine AI...")
+            entry.setPlaceholderText("Message Phoenix AI...")
             # Disabled-when-empty: only enable if there's content to send.
             btn.setEnabled(bool(entry.text().strip()))
 

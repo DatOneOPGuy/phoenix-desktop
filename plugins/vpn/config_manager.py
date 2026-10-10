@@ -1,8 +1,8 @@
 
 """
-VPN Configuration Manager for Resistine Desktop.
+VPN Configuration Manager for Phoenix Desktop.
 
-Manages multiple WireGuard configuration files stored in Resistine's
+Manages multiple WireGuard configuration files stored in Phoenix's
 own hidden config directories (not WireGuard's system folders).
 Tracks the active config via the settings system.
 """
@@ -25,8 +25,8 @@ class VPNConfigManager:
     def list_configs(self):
         """List all available .conf files.
 
-        Returns a list of dicts sorted with Resistine default first:
-        [{"name": "resistine", "display_name": "Resistine (Default)",
+        Returns a list of dicts sorted with Phoenix default first:
+        [{"name": "resistine", "display_name": "Phoenix (Default)",
           "source": "api", "path": "/path/to/file.conf"}, ...]
         """
         names = self._list_conf_files()
@@ -42,7 +42,7 @@ class VPNConfigManager:
                 "path": os.path.join(self.wireguard_folder, f"{name}.conf"),
             })
 
-        # Sort: Resistine default first, then alphabetical
+        # Sort: Phoenix default first, then alphabetical
         configs.sort(key=lambda c: (0 if c["name"] == RESISTINE_CONFIG_NAME else 1, c["name"]))
         return configs
 
@@ -121,11 +121,11 @@ class VPNConfigManager:
     def delete_config(self, config_name):
         """Delete a user-imported config.
 
-        Refuses to delete the Resistine default config.
+        Refuses to delete the Phoenix default config.
         Returns (True, "") on success or (False, reason) on failure.
         """
         if config_name == RESISTINE_CONFIG_NAME:
-            return False, "Cannot delete the Resistine default configuration"
+            return False, "Cannot delete the Phoenix default configuration"
 
         conf_path = os.path.join(self.wireguard_folder, f"{config_name}.conf")
         try:
@@ -155,7 +155,7 @@ class VPNConfigManager:
         registry[config_name] = {
             "source": source,
             "display_name": display_name or (
-                "Resistine (Default)" if config_name == RESISTINE_CONFIG_NAME else config_name
+                "Phoenix (Default)" if config_name == RESISTINE_CONFIG_NAME else config_name
             ),
         }
         app_settings.set(SETTINGS_NAMESPACE, "config_registry", registry)
@@ -163,13 +163,13 @@ class VPNConfigManager:
     def get_display_name(self, config_name):
         """Get human-readable display name for a config."""
         if config_name == RESISTINE_CONFIG_NAME:
-            return "Resistine (Default)"
+            return "Phoenix (Default)"
         registry = app_settings.get(SETTINGS_NAMESPACE, "config_registry", {})
         entry = registry.get(config_name, {})
         return entry.get("display_name", config_name)
 
     def is_resistine_config(self, config_name):
-        """Check if a config is the Resistine API config."""
+        """Check if a config is the Phoenix API config."""
         return config_name == RESISTINE_CONFIG_NAME
 
     def migrate_legacy_config(self):

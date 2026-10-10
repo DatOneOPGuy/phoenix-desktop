@@ -2,7 +2,7 @@
 ## @namespace utils.win_console
 """Suppress flashing console windows from child processes on Windows.
 
-Resistine ships as a windowed (no-console) build. On Windows, any child
+Phoenix ships as a windowed (no-console) build. On Windows, any child
 process started with the default flags briefly allocates its own console —
 a black window that pops up and vanishes. The app shells out constantly
 (WireGuard, ClamAV, Wazuh, `sc`, `icacls`, font probing, markdown

@@ -152,6 +152,11 @@ class Plugin(BasePlugin):
             uninstall_enabled=False,
         )
         self.app = app
+        # Kept installed (it drives plugin installs) but out of the UI until
+        # the plugin catalogue is rebuilt for Phoenix. ui.show_store=true
+        # brings it back.
+        from utils import settings as app_settings
+        self.hidden = not app_settings.get("ui", "show_store", False)
         self.status = self.get_status()
         self.plugin_cards: dict = {}
         self.remote_data_map: dict = {}
@@ -177,7 +182,7 @@ class Plugin(BasePlugin):
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         col.addWidget(self.title_label)
         col.addSpacing(4)
-        subtitle = muted("Browse and install plugins to extend Resistine.")
+        subtitle = muted("Browse and install plugins to extend Phoenix.")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         col.addWidget(subtitle)
         col.addSpacing(40)

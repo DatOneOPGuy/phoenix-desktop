@@ -35,6 +35,10 @@ class BasePlugin:
     # settle/reveal cascade, so this is a no-op flag.
     defer_reveal_until_settled = False
 
+    # Hidden plugins stay installed and loaded but get no sidebar entry or
+    # Dashboard card (e.g. the Store).
+    hidden = False
+
     def __init__(self, id, version, order, name, status, description,
                  supported_systems, translations, icon_light_path,
                  icon_dark_path, uninstall_enabled=True):
@@ -131,7 +135,7 @@ class BasePlugin:
         return self.icon_light if not theme.is_dark() else self.icon_dark
 
     @staticmethod
-    def _tint(pm: QPixmap) -> QPixmap:
+    def _tint(pm: QPixmap, color: str | None = None) -> QPixmap:
         """Colorize a monochrome line icon to the theme's primary text colour.
 
         The shipped *_light.png assets are pale grey and wash out on the
@@ -150,7 +154,7 @@ class BasePlugin:
         p.drawPixmap(0, 0, pm)
         p.setCompositionMode(
             QPainter.CompositionMode.CompositionMode_SourceIn)
-        p.fillRect(pm.rect(), QColor(theme.color("text_primary")))
+        p.fillRect(pm.rect(), QColor(color or theme.color("text_primary")))
         p.end()
         return out
 
@@ -169,6 +173,24 @@ class BasePlugin:
                 Qt.TransformationMode.SmoothTransformation,
             ))
         return QPixmap()
+
+    def get_nav_icon(self) -> QIcon:
+        """Sidebar icon: text colour normally, accent colour when selected."""
+        path = self._icon_path()
+        if not (path and os.path.isfile(path)):
+            return QIcon()
+        from gui import theme
+        src = QPixmap(path)
+        icon = QIcon()
+        icon.addPixmap(self._tint(src, theme.color("text_secondary")),
+                       QIcon.Mode.Normal, QIcon.State.Off)
+        icon.addPixmap(self._tint(src, theme.color("sidebar_active_text")),
+                       QIcon.Mode.Normal, QIcon.State.On)
+        icon.addPixmap(self._tint(src, theme.color("text_primary")),
+                       QIcon.Mode.Active, QIcon.State.Off)
+        icon.addPixmap(self._tint(src, theme.color("sidebar_active_text")),
+                       QIcon.Mode.Active, QIcon.State.On)
+        return icon
 
     def get_icon_large(self) -> QIcon:
         return self.get_icon()

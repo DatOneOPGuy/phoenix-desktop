@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Resistine Desktop is a cross-platform (macOS/Linux/Windows) security desktop app built with Python and CustomTkinter. It provides VPN (WireGuard), antivirus (ClamAV), SIEM (Wazuh), endpoint management, and AI chat through a modular plugin system.
+Phoenix Desktop is a cross-platform (macOS/Linux/Windows) security desktop app built with Python and PyQt6. It was renamed from Resistine; bundle IDs, service names and system paths still carry the old name. It provides VPN (WireGuard), antivirus (ClamAV), SIEM (Wazuh), endpoint management, and AI chat through a modular plugin system.
 
 ## Commands
 
@@ -67,11 +67,11 @@ Platform-specific implementations live in `*_functions_{darwin,linux,windows}.py
 
 ### Settings & Secrets
 
-`utils/settings.py` provides namespaced JSON config with Fernet encryption for secrets (prefixed `ENC:`). Master key stored in system keyring. Config dirs: `~/Library/Application Support/Resistine` (macOS), `%APPDATA%/Resistine` (Windows), `~/.config/resistine` (Linux).
+`utils/settings.py` provides namespaced JSON config with Fernet encryption for secrets (prefixed `ENC:`). Master key stored in system keyring. Config dirs: `~/Library/Application Support/Phoenix` (macOS), `%APPDATA%/Phoenix` (Windows), `~/.config/phoenix` (Linux); a pre-rebrand `Resistine`/`resistine` dir and the `resistine-master-key` keyring entry are migrated on first start.
 
 ### GUI
 
-`main.py` is the app entry point (App class extends `customtkinter.CTk`). UI components are in `gui/`. The plugin manager injects plugin screens into the main window. Theme switching (light/dark) via `gui/theme_manager.py`.
+`main.py` is the app entry point (builds a `QApplication` and the `gui/app_window.py` main window). UI components are in `gui/`. The plugin manager injects plugin screens into the main window. Theme switching (light/dark) via `gui/theme_manager.py`.
 
 ### Logging
 

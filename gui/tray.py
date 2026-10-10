@@ -1,6 +1,6 @@
 # tray.py
 """
-Resistine VPN System Tray Icon — standalone, no project imports.
+Phoenix VPN System Tray Icon — standalone, no project imports.
 Authors: Merhawi and the Resistine Team
 Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
@@ -28,7 +28,7 @@ except ImportError:
 BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # project root (up from gui/)
 ASSETS_DIR  = os.path.join(BASE_DIR, "resources", "icons")
 ICON_PATH   = os.path.join(ASSETS_DIR, "icon.ico")
-APPDATA_DIR = os.path.join(os.environ.get("APPDATA", ""), "Resistine")
+APPDATA_DIR = os.path.join(os.environ.get("APPDATA", ""), "Phoenix")
 WG_DIR      = os.path.join(APPDATA_DIR, "wireguard")
 CONFIG_FILE = os.path.join(APPDATA_DIR, "vpn_config.json")
 LOG_FILE    = os.path.join(APPDATA_DIR, "tray.log")
@@ -286,10 +286,10 @@ class ResistineTray:
 
     def _title(self) -> str:
         return {
-            "connected":    "Resistine VPN — Connected",
-            "disconnected": "Resistine VPN — Disconnected",
-            "connecting":   "Resistine VPN — Connecting...",
-        }.get(self._state, "Resistine VPN")
+            "connected":    "Phoenix VPN — Connected",
+            "disconnected": "Phoenix VPN — Disconnected",
+            "connecting":   "Phoenix VPN — Connecting...",
+        }.get(self._state, "Phoenix VPN")
 
     # ---- Actions ----
 
@@ -328,14 +328,14 @@ class ResistineTray:
         self._refresh_status()
 
     def on_open_app(self, icon, item):
-        """Open the main Resistine window — focus existing instance or launch new."""
+        """Open the main Phoenix window — focus existing instance or launch new."""
         # Check if main.py is already running by looking for its process
         try:
             import ctypes
             import ctypes.wintypes
 
-            # Find window by title prefix — main.py sets the window title to "Resistine"
-            hwnd = ctypes.windll.user32.FindWindowW(None, "Resistine")
+            # Find window by title prefix — main.py sets the window title to "Phoenix"
+            hwnd = ctypes.windll.user32.FindWindowW(None, "Phoenix")
             if hwnd:
                 # Window exists — bring it to foreground
                 SW_RESTORE = 9
@@ -376,7 +376,7 @@ class ResistineTray:
                  enabled=not is_connected and not is_connecting),
             item("Disconnect",     self.on_disconnect, enabled=is_connected),
             pystray.Menu.SEPARATOR,
-            item("Open Resistine", self.on_open_app, default=True),
+            item("Open Phoenix", self.on_open_app, default=True),
             item("Quit",           self.on_quit),
         )
 

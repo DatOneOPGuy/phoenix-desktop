@@ -38,7 +38,7 @@ class OTELink:
         # Initialize OTEL Logger Provider
         resource = Resource.create(
             {
-                "service.name": "resistine-desktop",
+                "service.name": "phoenix-desktop",
                 "service.version": "1.0.0",
             }
         )
@@ -46,7 +46,7 @@ class OTELink:
         self.logger_provider = LoggerProvider(resource=resource)
         _logs.set_logger_provider(self.logger_provider)
 
-        # OTLP/HTTP receiver. Default routes to the Resistine collector, which
+        # OTLP/HTTP receiver. Default routes to the Phoenix collector, which
         # forwards into the wazuh-indexer. Reachable only over the VPN; the
         # BatchLogRecordProcessor silently drops batches when unreachable.
         exporter = OTLPLogExporter(endpoint=f"{_otlp_endpoint()}/v1/logs")
@@ -54,7 +54,7 @@ class OTELink:
             BatchLogRecordProcessor(exporter)
         )
 
-        self.otel_logger = self.logger_provider.get_logger("resistine.logger")
+        self.otel_logger = self.logger_provider.get_logger("phoenix.logger")
 
     def __call__(self, message):
         record = message.record
@@ -127,10 +127,10 @@ class BufferedOTLPSink:
             timeout=self._EXPORT_TIMEOUT_SEC,
         )
         self._resource = Resource.create({
-            "service.name": "resistine-desktop",
+            "service.name": "phoenix-desktop",
             "service.version": "1.0.0",
         })
-        self._scope = InstrumentationScope("resistine.logger")
+        self._scope = InstrumentationScope("phoenix.logger")
         self._lock = threading.Lock()
         threading.Thread(
             target=self._flush_loop,
@@ -340,7 +340,7 @@ def setup_logging(level="INFO", log_to_file=True):
 
         log_dir = os.path.join(get_config_dir(), "logs")
         os.makedirs(log_dir, exist_ok=True)
-        log_file = os.path.join(log_dir, "resistine.log")
+        log_file = os.path.join(log_dir, "phoenix.log")
         logger.add(
             log_file,
             level=level,
