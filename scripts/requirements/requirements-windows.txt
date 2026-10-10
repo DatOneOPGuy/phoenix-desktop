@@ -43,3 +43,5 @@ opentelemetry-api
 opentelemetry-sdk
 opentelemetry-exporter-otlp-proto-http
 pyinstaller
+# Chat over Matrix (Settings -> Chat transport): E2EE via vodozemac
+matrix-nio[e2e]>=0.26
