@@ -1,7 +1,9 @@
 """Stream controller for chat API responses.
 
 Encapsulates the background-thread + queue.Queue + Tk polling pattern used
-to stream OpenAI-compatible chat completions without blocking the GUI.
+to stream OpenAI-compatible chat completions without blocking the GUI. A
+non-HTTP transport (plugins/chat/matrix_transport.py) plugs into the same
+pipeline by exposing ``stream_deltas()``.
 """
 
 from __future__ import annotations
@@ -90,11 +92,14 @@ class StreamController:
         self._queue = queue.Queue(maxsize=4096)
         self._stream = None
 
-        thread = threading.Thread(
-            target=self._worker,
-            args=(client, model, messages, temperature, extra_body, base_url),
-            daemon=True,
-        )
+        # A transport (Matrix) yields text deltas itself; anything else is an
+        # OpenAI SDK client. Both feed the same queue → poll → callbacks path.
+        if hasattr(client, "stream_deltas"):
+            target, args = self._worker_transport, (client, messages, extra_body)
+        else:
+            target = self._worker
+            args = (client, model, messages, temperature, extra_body, base_url)
+        thread = threading.Thread(target=target, args=args, daemon=True)
         thread.start()
         self._schedule_poll()
 
@@ -310,6 +315,40 @@ class StreamController:
                 f"[CHAT-STREAM] ✗ error after {elapsed:.2f}s"
                 f"{f' (HTTP {status})' if status else ''}: {msg}")
             self._safe_put(("error", msg))
+
+    def _worker_transport(self, transport, messages: list[dict],
+                          extra_body: dict | None) -> None:
+        """Run one turn through a non-HTTP transport (Matrix).
+
+        The transport owns the server-side history (like the HTTPS agent
+        endpoint), so only the newest user message is sent, plus the session.
+        """
+        t0 = time.monotonic()
+        session = (extra_body or {}).get("session_id")
+        text = messages[-1]["content"] if messages else ""
+        logger.info(f"[CHAT-STREAM] → {transport.describe()} session={session}")
+        n_chunks = n_chars = 0
+        try:
+            for delta in transport.stream_deltas(text, session, self._cancel_event):
+                if self._cancel_event.is_set():
+                    break
+                n_chunks += 1
+                n_chars += len(delta)
+                self._safe_put(("chunk", delta))
+            if self._cancel_event.is_set():
+                self._safe_put(("cancel", _CANCELLED))
+                return
+            logger.info(
+                f"[CHAT-STREAM] ✓ done: {n_chunks} updates, {n_chars} chars "
+                f"in {time.monotonic() - t0:.2f}s")
+            self._safe_put(("done", _DONE))
+        except Exception as e:
+            if self._cancel_event.is_set():
+                self._safe_put(("cancel", _CANCELLED))
+                return
+            logger.error(
+                f"[CHAT-STREAM] ✗ error after {time.monotonic() - t0:.2f}s: {e}")
+            self._safe_put(("error", str(e)))
 
     def _safe_put(self, item: tuple[str, object]) -> None:
         """Bounded put that yields to the cancel signal on a full queue.

@@ -38,6 +38,7 @@ from utils.logger import logger
 
 _DIR = os.path.dirname(os.path.realpath(__file__))
 _DEFAULT_BASE = "https://dashboard.resisti.net:8002/v1"
+_DEFAULT_MATRIX_BOT = "@secagent:phoenix.exposed"
 
 
 def _t(key, fallback):
@@ -161,6 +162,31 @@ class Plugin(BasePlugin):
     def _api_card(self) -> QWidget:
         card, lay = self._card(_t("settings.apikey.label", "OpenAI API Key"))
 
+        # Chat transport: the HTTPS OpenAI-compatible API, or an end-to-end
+        # encrypted Matrix DM with the Phoenix assistant bot.
+        lay.addWidget(self._muted(_t("settings.chat.transport", "Chat transport")))
+        self.transport_combo = _NoScrollComboBox()
+        self.transport_combo.addItem("OpenAI API (HTTPS)", "openai")
+        self.transport_combo.addItem("Matrix (end-to-end encrypted)", "matrix")
+        current = settings.get("chat", "transport") or "openai"
+        self.transport_combo.setCurrentIndex(
+            max(0, self.transport_combo.findData(current)))
+        lay.addWidget(self.transport_combo)
+
+        self.matrix_bot_label = self._muted(
+            _t("settings.chat.matrix_bot", "Assistant Matrix ID"))
+        lay.addWidget(self.matrix_bot_label)
+        self.matrix_bot_entry = QLineEdit()
+        self.matrix_bot_entry.setPlaceholderText(_DEFAULT_MATRIX_BOT)
+        self.matrix_bot_entry.setText(
+            settings.get("chat", "matrix_bot") or _DEFAULT_MATRIX_BOT)
+        lay.addWidget(self.matrix_bot_entry)
+        self.matrix_hint = self._muted("")
+        self.matrix_hint.setWordWrap(True)
+        lay.addWidget(self.matrix_hint)
+        self.transport_combo.currentIndexChanged.connect(
+            self._sync_transport_fields)
+
         self.api_key_entry = QLineEdit()
         self.api_key_entry.setEchoMode(QLineEdit.EchoMode.Password)
         self.api_key_entry.setPlaceholderText(
@@ -170,7 +196,8 @@ class Plugin(BasePlugin):
             self.api_key_entry.setText(existing_key)
         lay.addWidget(self.api_key_entry)
 
-        lay.addWidget(self._muted(_t("settings.apibase.label", "API Base URL")))
+        self.api_base_label = self._muted(_t("settings.apibase.label", "API Base URL"))
+        lay.addWidget(self.api_base_label)
         self.api_base_entry = QLineEdit()
         self.api_base_entry.setPlaceholderText(
             _t("settings.apibase.placeholder", "API base URL"))
@@ -185,6 +212,8 @@ class Plugin(BasePlugin):
         self.disable_animation_checkbox.toggled.connect(
             self.save_animation_setting)
         lay.addWidget(self.disable_animation_checkbox)
+
+        self._sync_transport_fields()
 
         row = QHBoxLayout()
         save = QPushButton(_t("settings.apikey.save", "Save"))
@@ -267,16 +296,44 @@ class Plugin(BasePlugin):
                     pass
                 break
 
+    def _sync_transport_fields(self, *_):
+        """Show the Matrix fields only for the Matrix transport."""
+        matrix = self.transport_combo.currentData() == "matrix"
+        for w in (self.api_key_entry, self.api_base_label, self.api_base_entry):
+            w.setVisible(not matrix)
+        for w in (self.matrix_bot_label, self.matrix_bot_entry, self.matrix_hint):
+            w.setVisible(matrix)
+        if matrix:
+            try:
+                from plugins.login import oidc
+                signed_in = oidc.has_session()
+            except Exception:
+                signed_in = False
+            self.matrix_hint.setText(
+                "Uses your Phoenix account; messages are end-to-end encrypted."
+                if signed_in else
+                "Sign in with your Phoenix account (Profile) to use Matrix chat.")
+
     def save_api_key(self):
         api_key = self.api_key_entry.text().strip()
         api_base = self.api_base_entry.text().strip()
-        if not api_key and not api_base:
+        transport = self.transport_combo.currentData() or "openai"
+        bot = self.matrix_bot_entry.text().strip()
+        if bot and not (bot.startswith("@") and ":" in bot):
+            self.status_label.setText("Matrix ID must look like @name:server")
+            self.status_label.setStyleSheet("color: #DC2626;")
             return
-        ok_key = (settings.set_secret("chat", "openai_api_key", api_key)
-                  if api_key else True)
-        ok_base = settings.set("chat", "openai_base_url",
-                               api_base if api_base else None)
-        if ok_key and ok_base:
+        ok_transport = settings.set("chat", "transport", transport)
+        ok_bot = settings.set("chat", "matrix_bot",
+                              bot if bot and bot != _DEFAULT_MATRIX_BOT else None)
+        if transport == "openai" and not api_key and not api_base:
+            ok_key = ok_base = True
+        else:
+            ok_key = (settings.set_secret("chat", "openai_api_key", api_key)
+                      if api_key else True)
+            ok_base = settings.set("chat", "openai_base_url",
+                                   api_base if api_base else None)
+        if ok_key and ok_base and ok_transport and ok_bot:
             self.status_label.setText(
                 _t("settings.apikey.saved_success", "Saved"))
             self.status_label.setStyleSheet("color: #16A34A;")

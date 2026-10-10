@@ -621,7 +621,20 @@ class Plugin(BasePlugin):
             return False
 
     def reinitialize_client(self, notify: bool = False):
-        """Rebuild the OpenAI client from the current settings."""
+        """Rebuild the chat client (OpenAI API or Matrix) from settings."""
+        self.transport = settings.get("chat", "transport") or "openai"
+        if self.transport == "matrix":
+            self._init_matrix_client()
+            try:
+                self._sync_input_enabled()
+            except Exception:
+                pass
+            return
+        try:
+            from plugins.chat import matrix_transport
+            matrix_transport.shutdown_service()
+        except Exception:
+            pass
         api_key = settings.get_secret("chat", "openai_api_key")
         self.base_url = (
             settings.get("chat", "openai_base_url") or _DEFAULT_BASE_URL)
@@ -659,6 +672,31 @@ class Plugin(BasePlugin):
             self._sync_input_enabled()
         except Exception:
             pass
+
+    def _init_matrix_client(self) -> None:
+        """Matrix transport: the assistant is a bot in an encrypted DM.
+
+        Like the HTTPS agent endpoint, the server keeps the history, so the
+        plugin runs in "server-side agent" mode: ``base_url`` is truthy (only
+        the new message is sent, no local system prompt) and names the bot.
+        """
+        from plugins.chat import matrix_transport
+        bot = settings.get("chat", "matrix_bot") or matrix_transport.DEFAULT_BOT
+        self.base_url = f"matrix:{bot}"
+        self.session_id = None
+        self.model = "matrix"
+        self.conversation_history = []
+        self.client = None
+        try:
+            from plugins.login import oidc
+            if not matrix_transport.available():
+                logger.error("Chat: Matrix transport selected but matrix-nio[e2e] is not installed")
+            elif not oidc.has_session():
+                logger.info("Chat: Matrix transport needs a Phoenix sign-in")
+            else:
+                self.client = matrix_transport.MatrixTransport(bot)
+        except Exception as e:
+            logger.error(f"Chat: Matrix transport init failed: {e}")
 
     # ===================================================================
     #  Screen construction
@@ -1208,14 +1246,18 @@ class Plugin(BasePlugin):
             f"background: transparent;")
         lay.addWidget(icon)
 
-        title = QLabel("API Key Required")
+        matrix = getattr(self, "transport", "openai") == "matrix"
+        title = QLabel("Sign-in Required" if matrix else "API Key Required")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet(
             f"font-size: 20px; font-weight: 700; "
             f"color: {theme.color('text_primary')}; background: transparent;")
         lay.addWidget(title)
 
-        desc = QLabel("Add an API key in Settings to start chatting.")
+        desc = QLabel(
+            "Matrix chat uses your Phoenix account. Sign in, or switch the "
+            "chat transport back to OpenAI API in Settings."
+            if matrix else "Add an API key in Settings to start chatting.")
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
         desc.setWordWrap(True)
         desc.setStyleSheet(
@@ -1482,8 +1524,11 @@ class Plugin(BasePlugin):
             on_done=self._on_stream_done, on_error=self._on_stream_error)
         msgs = ([{"role": "user", "content": user_text}]
                 if self.base_url else list(self.conversation_history))
-        extra = ({"session_id": self.session_id}
-                 if self.base_url and self.session_id else None)
+        # The server keeps the conversation per session, so every turn of a
+        # chat must carry the same id: the local chat id is that id.
+        session = self.session_id or self._history.get_active_id()
+        extra = ({"session_id": session}
+                 if self.base_url and session else None)
         self._last_payload = (msgs, extra)  # kept for error-bubble Retry
         try:
             self._stream_ctrl.start(
@@ -1644,7 +1689,10 @@ class Plugin(BasePlugin):
             return
         if self.client is None:
             entry.setEnabled(False)
-            entry.setPlaceholderText("API key required — see Settings")
+            entry.setPlaceholderText(
+                "Sign in with your Phoenix account to use Matrix chat"
+                if getattr(self, "transport", "openai") == "matrix"
+                else "API key required — see Settings")
             btn.setEnabled(False)
         else:
             entry.setEnabled(True)
