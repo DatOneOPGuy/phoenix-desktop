@@ -16,7 +16,49 @@
         inherit (pkgs) lib;
 
         # Python 3.13 is the project target (see CLAUDE.md and .github/workflows/ci.yml).
-        python = pkgs.python313;
+        #
+        # Chat over Matrix (plugins/chat/matrix_transport.py) needs matrix-nio
+        # >= 0.26 with E2EE, whose crypto backend is vodozemac. nixpkgs only has
+        # matrix-nio 0.25 (E2EE via python-olm/libolm, which nixpkgs marks
+        # insecure) and no vodozemac binding, so both are provided here.
+        python = pkgs.python313.override {
+          self = python;
+          packageOverrides = pyfinal: pyprev: {
+            vodozemac = pyfinal.buildPythonPackage rec {
+              pname = "vodozemac";
+              version = "0.10.0";
+              pyproject = true;
+              src = pyfinal.fetchPypi {
+                inherit pname version;
+                hash = "sha256-lgLtuHq30W57Sq1aCHRz2PtrPumQQ/mq8PVLt4lw3ek=";
+              };
+              cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
+                inherit pname version src;
+                hash = "sha256-owvBFMoem6hn4dC9pR/DVqZoHFl7oIRBBodmAgWmDxU=";
+              };
+              nativeBuildInputs = with pkgs.rustPlatform; [ cargoSetupHook maturinBuildHook ];
+              pythonImportsCheck = [ "vodozemac" ];
+              meta.license = lib.licenses.asl20;
+            };
+            matrix-nio = pyprev.matrix-nio.overridePythonAttrs (old: rec {
+              version = "0.26.0";
+              src = pyfinal.fetchPypi {
+                pname = "matrix_nio";
+                inherit version;
+                hash = "sha256-av96odnm5TUd+Pl59LZHo7NH9jXjBrJuJoL9O1nY5qg=";
+              };
+              build-system = [ pyfinal.setuptools ];
+              patches = [ ];
+              postPatch = "";
+              optional-dependencies = old.optional-dependencies // {
+                e2e = with pyfinal; [ atomicwrites cachetools peewee vodozemac ];
+              };
+              # The PyPI sdist ships no test suite.
+              doCheck = false;
+              pythonImportsCheck = [ "nio" "nio.crypto" ];
+            });
+          };
+        };
 
         # Runtime Python deps. Mirrors scripts/requirements/requirements-linux.txt,
         # narrowed to what is actually imported plus the hiddenimports listed in
@@ -43,7 +85,9 @@
           opentelemetry-api
           opentelemetry-sdk
           opentelemetry-exporter-otlp-proto-http
-        ];
+          # Chat over Matrix (E2EE); see the python override above.
+          matrix-nio
+        ] ++ matrix-nio.optional-dependencies.e2e;
 
         pythonEnv = python.withPackages pythonDeps;
 
@@ -119,6 +163,8 @@
               from PyQt6.QtSvg import QSvgRenderer          # noqa: F401
               from PyQt6.QtWidgets import QApplication      # noqa: F401
               import httpx, markdown, openai, PIL, requests  # noqa: F401
+              from nio.crypto import ENCRYPTION_ENABLED       # Matrix chat
+              assert ENCRYPTION_ENABLED, "matrix-nio built without E2EE"
               print("import check ok")
               EOF
               runHook postCheck
