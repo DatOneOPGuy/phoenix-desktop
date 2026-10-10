@@ -242,3 +242,28 @@ class TestSettingsTransportCard:
         p.save_api_key()
         assert settings.get("chat", "transport") is None
         assert "Matrix ID" in p.status_label.text()
+
+
+@pytest.mark.unit
+class TestMatrixUnavailableReason:
+    def test_missing_e2ee_is_not_reported_as_sign_in(self, isolated_settings, monkeypatch):
+        from plugins.login import oidc
+        from utils import settings
+
+        settings.set("chat", "transport", "matrix")
+        monkeypatch.setattr(oidc, "has_session", lambda: True)
+        monkeypatch.setattr(mt, "available", lambda: False)
+        from plugins.chat.main import Plugin
+        p = Plugin(MagicMock())
+        assert p.client is None and p._matrix_problem == "unavailable"
+
+    def test_signed_out_reports_sign_in(self, isolated_settings, monkeypatch):
+        from plugins.login import oidc
+        from utils import settings
+
+        settings.set("chat", "transport", "matrix")
+        monkeypatch.setattr(oidc, "has_session", lambda: False)
+        monkeypatch.setattr(mt, "available", lambda: True)
+        from plugins.chat.main import Plugin
+        p = Plugin(MagicMock())
+        assert p.client is None and p._matrix_problem == "signin"

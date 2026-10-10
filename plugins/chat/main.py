@@ -687,14 +687,18 @@ class Plugin(BasePlugin):
         self.model = "matrix"
         self.conversation_history = []
         self.client = None
+        # Why there is no client: shown on the chat screen instead of a guess.
+        self._matrix_problem = "unavailable"
         try:
             from plugins.login import oidc
             if not matrix_transport.available():
                 logger.error("Chat: Matrix transport selected but matrix-nio[e2e] is not installed")
             elif not oidc.has_session():
                 logger.info("Chat: Matrix transport needs a Phoenix sign-in")
+                self._matrix_problem = "signin"
             else:
                 self.client = matrix_transport.MatrixTransport(bot)
+                self._matrix_problem = None
         except Exception as e:
             logger.error(f"Chat: Matrix transport init failed: {e}")
 
@@ -1247,17 +1251,26 @@ class Plugin(BasePlugin):
         lay.addWidget(icon)
 
         matrix = getattr(self, "transport", "openai") == "matrix"
-        title = QLabel("Sign-in Required" if matrix else "API Key Required")
+        signin = getattr(self, "_matrix_problem", None) == "signin"
+        title = QLabel(
+            ("Sign-in Required" if signin else "Matrix Chat Unavailable")
+            if matrix else "API Key Required")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet(
             f"font-size: 20px; font-weight: 700; "
             f"color: {theme.color('text_primary')}; background: transparent;")
         lay.addWidget(title)
 
-        desc = QLabel(
-            "Matrix chat uses your Phoenix account. Sign in, or switch the "
-            "chat transport back to OpenAI API in Settings."
-            if matrix else "Add an API key in Settings to start chatting.")
+        if not matrix:
+            text = "Add an API key in Settings to start chatting."
+        elif signin:
+            text = "Sign in with your Phoenix account, or switch the transport in Settings."
+        else:
+            text = "This build lacks Matrix encryption support. Switch the transport in Settings."
+        desc = QLabel(text)
+        # A word-wrapped label in a centered layout gets a too-small height
+        # for its line count (text was clipped); give it room to stay short.
+        desc.setMinimumWidth(460)
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
         desc.setWordWrap(True)
         desc.setStyleSheet(
@@ -1689,10 +1702,13 @@ class Plugin(BasePlugin):
             return
         if self.client is None:
             entry.setEnabled(False)
-            entry.setPlaceholderText(
-                "Sign in with your Phoenix account to use Matrix chat"
-                if getattr(self, "transport", "openai") == "matrix"
-                else "API key required — see Settings")
+            if getattr(self, "transport", "openai") != "matrix":
+                hint = "API key required — see Settings"
+            elif getattr(self, "_matrix_problem", None) == "signin":
+                hint = "Sign in with your Phoenix account to use Matrix chat"
+            else:
+                hint = "Matrix chat is not available in this build"
+            entry.setPlaceholderText(hint)
             btn.setEnabled(False)
         else:
             entry.setEnabled(True)
