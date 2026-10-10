@@ -1,9 +1,12 @@
-Package: resistine
+Package: phoenix
 Version: ${VERSION}
 Section: utils
 Priority: optional
 Architecture: amd64
 Depends: wireguard-tools, libxcb-cursor0
-Maintainer: Resistine Team <info@resistine.com>
-Description: Resistine Desktop Application
- Resistine is a security endpoint and VPN manager.
+Conflicts: resistine
+Replaces: resistine
+Provides: resistine
+Maintainer: Phoenix Team <info@phoenix.exposed>
+Description: Phoenix Desktop Application
+ Phoenix is a security endpoint and VPN manager.

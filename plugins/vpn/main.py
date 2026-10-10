@@ -117,7 +117,7 @@ def _resolve_wireguard_folder() -> str:
     except Exception as e:
         logger.warning(f"Could not resolve WireGuard dir: {e}")
     # Fallback so the plugin can still build on an unsupported host.
-    return os.path.join(os.path.expanduser("~"), ".config", "resistine", "wireguard")
+    return os.path.join(os.path.expanduser("~"), ".config", "phoenix", "wireguard")
 
 
 wireguard_folder = _resolve_wireguard_folder()
@@ -270,7 +270,7 @@ class Plugin(BasePlugin):
             order=3,
             name="VPN",
             status=None,  # Default status
-            description="VPN Management",
+            description="Encrypt your traffic through the Phoenix network.",
             supported_systems=["Windows", "Darwin", "Linux"],
             translations={"US": "VPN", "ES": "VPN", "FR": "VPN"},
             icon_light_path=os.path.join(

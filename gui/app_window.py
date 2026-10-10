@@ -22,7 +22,7 @@ import os
 import threading
 
 from PyQt6.QtCore import QSize, Qt, QTimer, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QIcon, QPainter, QPixmap
+from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QFrame,
@@ -66,7 +66,7 @@ class AppWindow(QMainWindow):
         self.current_frame_name = ""
         self._current_main_screen = None
 
-        self.setWindowTitle("Resistine")
+        self.setWindowTitle("Phoenix")
         self.resize(1120, 720)
         self.setMinimumSize(820, 480)
         icon_png = resource("resources", "icons", "app_icon.png")
@@ -165,116 +165,73 @@ class AppWindow(QMainWindow):
         self.setCentralWidget(root)
 
     # ---- Sidebar ----------------------------------------------------------
+    # Icon-only rail: the plugin name is the tooltip and accessible name.
+    SIDEBAR_WIDTH = 76
+
     def _build_sidebar(self, layout: QHBoxLayout) -> None:
         self.sidebar = QFrame()
         self.sidebar.setObjectName("Sidebar")
-        self.sidebar.setFixedWidth(250)
+        self.sidebar.setFixedWidth(self.SIDEBAR_WIDTH)
         sb = QVBoxLayout(self.sidebar)
-        sb.setContentsMargins(12, 20, 12, 16)
-        sb.setSpacing(4)
+        sb.setContentsMargins(12, 18, 12, 16)
+        sb.setSpacing(6)
+        sb.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
-        sb.addWidget(self._logo_widget())
-        divider = QFrame()
-        divider.setFixedHeight(1)
-        divider.setObjectName("Divider")
-        sb.addSpacing(8)
-        sb.addWidget(divider)
-        sb.addSpacing(8)
+        sb.addWidget(self._logo_widget(), 0, Qt.AlignmentFlag.AlignHCenter)
+        sb.addSpacing(14)
 
         self._nav_group = QButtonGroup(self)
         self._nav_group.setExclusive(True)
+        bottom = []
         for p in self.plugins:
-            if p.order <= 0 or p.order == -1:
-                continue  # Login (0) and explicitly-hidden (-1) plugins
-            btn = QPushButton(f"  {p.get_name()}")
+            if p.order <= 0 or getattr(p, "hidden", False):
+                continue  # Login (0), explicitly-hidden (-1) and hidden plugins
+            btn = QPushButton()
             btn.setObjectName("NavButton")
             btn.setCheckable(True)
+            btn.setFixedSize(52, 48)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setIconSize(QSize(20, 20))
-            btn.setIcon(p.get_icon())
+            btn.setIconSize(QSize(24, 24))
+            btn.setIcon(p.get_nav_icon())
+            btn.setToolTip(p.get_name())
+            btn.setAccessibleName(p.get_name())
             btn.clicked.connect(
                 lambda _=False, n=p.get_name(): self.select_frame_by_name(
                     f"frame_{n}"))
             self._nav_group.addButton(btn)
             self._nav_buttons[p.get_name()] = btn
             p.set_button(btn)
-            sb.addWidget(btn)
+            # Help + Settings (order >= 1000) sit at the bottom of the rail.
+            if p.order >= 1000:
+                bottom.append(btn)
+            else:
+                sb.addWidget(btn, 0, Qt.AlignmentFlag.AlignHCenter)
 
         sb.addStretch(1)
-        version = QLabel("Resistine Desktop")
-        version.setObjectName("Muted")
-        version.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        sb.addWidget(version)
+        for btn in bottom:
+            sb.addWidget(btn, 0, Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(self.sidebar)
 
     def _logo_widget(self) -> QWidget:
-        # Primary: the blue "Resistine" wordmark banner (4:1). Shown in the
-        # sidebar across the whole app; the shield mark stays reserved for
-        # the login flow / setup wizard.
-        wordmark_path = resource("resources", "icons", "ResistineWordmark.png")
-        svg_path = resource("resources", "icons", "ResistineLogo.svg")
-        png_path = resource("resources", "icons", "ResistineLogoWhiteText.png")
+        # The square Phoenix app mark (same art as the login screen).
         label = QLabel()
-        # Centered in the sidebar.
-        label.setAlignment(Qt.AlignmentFlag.AlignHCenter
-                           | Qt.AlignmentFlag.AlignVCenter)
-
-        # The logo art is a 4:1 banner. Render at 2x and tag the device pixel
-        # ratio so it stays crisp on Retina displays.
-        w, h, radius = 200, 50, 12
-        pm = None
-        if os.path.isfile(wordmark_path):
-            pm = QPixmap(wordmark_path).scaled(
-                w * 2, h * 2, Qt.AspectRatioMode.IgnoreAspectRatio,
-                Qt.TransformationMode.SmoothTransformation)
-            if not pm.isNull():
-                # Square corners by design — the wordmark banner is shown
-                # as-is (no rounded clip).
-                pm.setDevicePixelRatio(2.0)
-                label.setPixmap(pm)
-                return label
-            pm = None
-        try:
-            if os.path.isfile(svg_path):
-                from PyQt6.QtSvg import QSvgRenderer
-                renderer = QSvgRenderer(svg_path)
-                pm = QPixmap(QSize(w, h))
-                pm.fill(Qt.GlobalColor.transparent)
-                painter = QPainter(pm)
-                renderer.render(painter)
-                painter.end()
-        except Exception:
-            pm = None
-        if (pm is None or pm.isNull()) and os.path.isfile(png_path):
-            pm = QPixmap(png_path).scaled(
-                w, h, Qt.AspectRatioMode.IgnoreAspectRatio,
-                Qt.TransformationMode.SmoothTransformation)
-
-        if pm is not None and not pm.isNull():
-            label.setPixmap(self._round_pixmap(pm, radius))
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setToolTip("Phoenix")
+        size = 44
+        path = resource("resources", "icons", "PhoenixMark.png")
+        pm = QPixmap(path) if os.path.isfile(path) else QPixmap()
+        if not pm.isNull():
+            ratio = 2.0
+            pm = pm.scaled(int(size * ratio), int(size * ratio),
+                           Qt.AspectRatioMode.KeepAspectRatio,
+                           Qt.TransformationMode.SmoothTransformation)
+            pm.setDevicePixelRatio(ratio)
+            label.setPixmap(pm)
             return label
-
-        label.setText("Resistine")
+        label.setText("P")
         label.setStyleSheet(
-            f"font-size: 20px; font-weight: 800; color: {theme.color('accent')};")
+            f"font-size: 24px; font-weight: 800; color: {theme.color('accent')};")
         return label
-
-    @staticmethod
-    def _round_pixmap(src: QPixmap, radius: int) -> QPixmap:
-        """Clip a pixmap to a rounded rectangle (restores the CTk logo's
-        rounded corners)."""
-        from PyQt6.QtGui import QPainterPath
-        out = QPixmap(src.size())
-        out.fill(Qt.GlobalColor.transparent)
-        p = QPainter(out)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        path = QPainterPath()
-        path.addRoundedRect(
-            0.0, 0.0, float(src.width()), float(src.height()), radius, radius)
-        p.setClipPath(path)
-        p.drawPixmap(0, 0, src)
-        p.end()
-        return out
 
     # ===================================================================
     #  Navigation
@@ -332,7 +289,7 @@ class AppWindow(QMainWindow):
                 names.add(p.get_name())
                 btn = self._nav_buttons.get(p.get_name())
                 if btn is not None:
-                    btn.setIcon(p.get_icon())
+                    btn.setIcon(p.get_nav_icon())
         for n in names:
             self._rebuild_screen(n)
 
@@ -375,7 +332,7 @@ class AppWindow(QMainWindow):
         for name, btn in self._nav_buttons.items():
             p = self._plugin_by_name(name)
             if p is not None:
-                btn.setIcon(p.get_icon())
+                btn.setIcon(p.get_nav_icon())
             try:
                 btn.setAttribute(
                     Qt.WidgetAttribute.WA_UnderMouse, False)

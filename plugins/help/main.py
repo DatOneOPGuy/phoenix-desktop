@@ -98,7 +98,7 @@ class Plugin(BasePlugin):
         super().__init__(
             id="009", version="2025.01.01", order=1010, name="Help",
             status=None,
-            description="This plugin provides help documentation.",
+            description="Guides and answers for using Phoenix.",
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Help", "ES": "Ayuda", "FR": "Aide"},
             icon_light_path=os.path.join(_DIR, "help_light.png"),

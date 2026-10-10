@@ -25,7 +25,7 @@ class TestDarwinConfigDir:
         with patch.object(platform, "system", return_value="Darwin"):
             # Reimport to pick up the patched platform
             path = s.get_config_dir()
-            assert "Library/Application Support/Resistine" in path
+            assert "Library/Application Support/Phoenix" in path
 
     def test_config_dir_exists_under_home(self, monkeypatch):
         import utils.settings as s

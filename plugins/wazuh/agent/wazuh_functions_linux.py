@@ -29,6 +29,7 @@ from plugins.wazuh.config import (
     WAZUH_PROTOCOL,
     WAZUH_REGISTRATION_PORT,
     LINUX_WAZUH_DIR,
+    LINUX_WAZUH_DIR_CANDIDATES,
 )
 
 # Deployment-variable prefix passed to the package installer.  Carries the
@@ -230,8 +231,30 @@ def get_package_url():
         return LINUX_WAZUH_RPM_URL.format(arch=arch_suffix)
     return None
 
+def installed_agent_dir():
+    """Return the install dir of an existing agent, or None.
+
+    Only the directory itself is stat'ed, so a root-only (0700) tree such as
+    the NixOS module's /opt/resistine is still detected.
+    """
+    for d in LINUX_WAZUH_DIR_CANDIDATES:
+        if os.path.isdir(d):
+            return d
+    return None
+
+
 def is_agent_installed():
-    return os.path.exists(LINUX_WAZUH_DIR)
+    return installed_agent_dir() is not None
+
+
+def is_app_managed_agent():
+    """True only for the agent this app installs (upstream package, /var/ossec).
+
+    An agent under another candidate dir was installed some other way (the
+    Phoenix package, the NixOS module); the app shows it but never removes or
+    re-enrolls it.
+    """
+    return os.path.isdir(LINUX_WAZUH_DIR)
 
 def get_agent_status():
     if not is_agent_installed():
@@ -272,9 +295,10 @@ def get_agent_connection():
     """
     from plugins.wazuh.agent import agent_state
 
+    agent_dir = installed_agent_dir() or LINUX_WAZUH_DIR
     return agent_state.read_agent_connection(
-        os.path.join(LINUX_WAZUH_DIR, "var", "run", "wazuh-agentd.state"),
-        os.path.join(LINUX_WAZUH_DIR, "logs", "ossec.log"),
+        os.path.join(agent_dir, "var", "run", "wazuh-agentd.state"),
+        os.path.join(agent_dir, "logs", "ossec.log"),
     )
 
 def download_package(progress_callback=None):
@@ -309,7 +333,7 @@ def write_env_file(agent_name, agent_group):
     # Not using env file for Linux, we'll pass via environment to the installer or patch ossec.conf
     pass
 
-_KEY_BACKUP = os.path.expanduser("~/.config/resistine/wazuh_client.keys")
+_KEY_BACKUP = os.path.join(settings.get_config_dir(), "wazuh_client.keys")
 _CLIENT_KEYS = f"{LINUX_WAZUH_DIR}/etc/client.keys"
 
 def start_agent():
@@ -377,7 +401,7 @@ def agent_present(wipe_keys: bool = False) -> bool:
     Mirrors remove_agent's guard so callers batching privileged work (e.g. the
     app uninstaller) can decide whether to include the teardown commands.
     """
-    return is_agent_installed() or (wipe_keys and os.path.exists(_KEY_BACKUP))
+    return is_app_managed_agent() or (wipe_keys and os.path.exists(_KEY_BACKUP))
 
 
 def build_remove_script(wipe_keys: bool = False) -> str:
@@ -571,6 +595,9 @@ def reenroll_agent():
 
     if not is_agent_installed():
         return (False, "Wazuh agent is not installed")
+    if not is_app_managed_agent():
+        return (False, f"The agent in {installed_agent_dir()} is managed outside "
+                       "this app; re-enroll it with its own installer")
 
     base = get_agent_name()
     new_name = f"{base}-{str(int(time.time()))[-6:]}"

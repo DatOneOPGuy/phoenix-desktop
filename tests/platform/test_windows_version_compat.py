@@ -43,7 +43,7 @@ class TestEnvVarAvailability:
             with patch.dict(os.environ, env, clear=True):
                 from utils.settings import get_config_dir
                 path = get_config_dir()
-        assert "Resistine" in path
+        assert "Phoenix" in path
         assert os.path.isabs(path)
 
     def test_programdata_fallback(self):
@@ -296,7 +296,7 @@ class TestPathCompat:
             with patch.dict(os.environ, {"APPDATA": r"C:\Users\M\u00fcller\AppData\Roaming"}):
                 from utils.settings import get_config_dir
                 path = get_config_dir()
-        assert "Resistine" in path
+        assert "Phoenix" in path
 
     def test_config_filename_sanitization_on_windows(self, wireguard_dir, isolated_settings, sample_wireguard_conf):
         """Windows-reserved chars in filenames must be stripped."""

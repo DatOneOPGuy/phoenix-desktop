@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec file for Resistine Desktop Application
+PyInstaller spec file for Phoenix Desktop Application
 This bundles the Python PyQt6 UI with all dependencies
 Swift components (CLI, XPC, Network Extension) are added by build script
 """
@@ -14,7 +14,11 @@ IS_MACOS = sys.platform == "darwin"
 IS_WINDOWS = sys.platform == "win32"
 
 # Application metadata
+# Bundle / executable file name. Stays 'Resistine' until the bundle-ID
+# rename: root launchd daemons, Windows Run keys and in-place updaters
+# reference the installed path. Users see DISPLAY_NAME.
 APP_NAME = 'Resistine'
+DISPLAY_NAME = 'Phoenix'
 BUNDLE_ID = 'com.resistine.desktop'
 VERSION = '2026.07.20-rc'
 
@@ -239,8 +243,8 @@ if IS_MACOS:
         version=VERSION,
         info_plist={
             # Basic app info
-            'CFBundleName': APP_NAME,
-            'CFBundleDisplayName': 'Resistine',
+            'CFBundleName': DISPLAY_NAME,
+            'CFBundleDisplayName': DISPLAY_NAME,
             'CFBundleExecutable': APP_NAME,
             'CFBundleIdentifier': BUNDLE_ID,
             'CFBundleVersion': VERSION,
@@ -257,7 +261,7 @@ if IS_MACOS:
 
             # Permissions (will be expanded with actual entitlements)
             'NSNetworkClient': True,
-            'NSSystemAdministrationUsageDescription': 'Resistine needs admin access to manage VPN connections.',
+            'NSSystemAdministrationUsageDescription': 'Phoenix needs admin access to manage VPN connections.',
 
             # XPC Services (will be populated by build script)
             'NSXPCServices': ['ResistineVPNXPC'],

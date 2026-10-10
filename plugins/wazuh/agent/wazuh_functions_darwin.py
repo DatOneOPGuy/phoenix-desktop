@@ -342,7 +342,7 @@ def start_agent():
 def restore_client_key_if_needed():
     """Restore client.keys from backup if it is missing, then restart the agent.
 
-    Called when Wazuh is already installed (e.g. after a Resistine app
+    Called when Wazuh is already installed (e.g. after a Phoenix app
     reinstall) but client.keys was lost.  Returns True if the key was
     already present or was successfully restored; False on failure.
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Description: This script updates all dependencies and runs the Resistine application.
+# Description: This script updates all dependencies and runs the Phoenix application.
 # If the .venv folder does not exist, it will run the install.sh script first.
 # Usage: ./run.sh
 

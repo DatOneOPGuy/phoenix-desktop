@@ -146,7 +146,7 @@ jobs:
         run: |
           # sign_update reads the key from SPARKLE_ED_PRIVATE_KEY env var
           # when the keychain entry isn't available
-          SIGN_OUTPUT=$(./scripts/build/sign_update dist/Resistine-Installer.dmg)
+          SIGN_OUTPUT=$(./scripts/build/sign_update dist/Phoenix-Installer.dmg)
           echo "Raw output: $SIGN_OUTPUT"
 
           ED_SIGNATURE=$(echo "$SIGN_OUTPUT" | grep -o 'sparkle:edSignature="[^"]*"' | cut -d'"' -f2)
@@ -160,7 +160,7 @@ jobs:
         id: release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/Resistine-Installer.dmg
+          files: dist/Phoenix-Installer.dmg
           generate_release_notes: true
           prerelease: ${{ steps.version.outputs.IS_PRERELEASE == 'true' }}
         env:
@@ -176,7 +176,7 @@ jobs:
           DEPLOY_KEY: ${{ secrets.PAGES_DEPLOY_KEY }}
         run: |
           PUB_DATE=$(date -u '+%a, %d %b %Y %H:%M:%S +0000')
-          DOWNLOAD_URL="https://github.com/Resistine/Resistine-Desktop/releases/download/v${VERSION}/Resistine-Installer.dmg"
+          DOWNLOAD_URL="https://github.com/Resistine/Resistine-Desktop/releases/download/v${VERSION}/Phoenix-Installer.dmg"
 
           # Add sparkle:channel tag for beta/pre-release versions
           CHANNEL_TAG=""

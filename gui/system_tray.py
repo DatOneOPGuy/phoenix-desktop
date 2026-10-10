@@ -9,7 +9,7 @@ could not work from a frozen install. This lives *inside* the app process
 instead: no second Python interpreter, works in the PyInstaller build, and
 closing the main window hides it to the tray instead of quitting.
 
-Menu: a (disabled) VPN status line, Open Resistine, VPN Settings, and Quit.
+Menu: a (disabled) VPN status line, Open Phoenix, VPN Settings, and Quit.
 Single/double-click on the icon restores the window. VPN status is polled so
 the line and tooltip stay current.
 
@@ -54,7 +54,7 @@ class SystemTray(QObject):
             return False
 
         self._tray = QSystemTrayIcon(self._load_icon(), self)
-        self._tray.setToolTip("Resistine")
+        self._tray.setToolTip("Phoenix")
         self._tray.setContextMenu(self._build_menu())
         self._tray.activated.connect(self._on_activated)
         self._tray.show()
@@ -88,7 +88,7 @@ class SystemTray(QObject):
         menu.addAction(self._status_action)
         menu.addSeparator()
 
-        open_action = QAction("Open Resistine", menu)
+        open_action = QAction("Open Phoenix", menu)
         open_action.triggered.connect(self._show_window)
         menu.addAction(open_action)
 
@@ -97,7 +97,7 @@ class SystemTray(QObject):
         menu.addAction(vpn_action)
 
         menu.addSeparator()
-        quit_action = QAction("Quit Resistine", menu)
+        quit_action = QAction("Quit Phoenix", menu)
         quit_action.triggered.connect(self._quit)
         menu.addAction(quit_action)
         return menu
@@ -157,7 +157,7 @@ class SystemTray(QObject):
             if self._status_action is not None:
                 self._status_action.setText(f"{dot}  VPN: {label}")
             if self._tray is not None:
-                self._tray.setToolTip(f"Resistine — VPN {label}")
+                self._tray.setToolTip(f"Phoenix — VPN {label}")
         except RuntimeError:
             pass
 
@@ -177,7 +177,7 @@ class SystemTray(QObject):
             self._notified_hidden = True
             try:
                 self._tray.showMessage(
-                    "Resistine is still running",
+                    "Phoenix is still running",
                     "The app was minimised to the tray. "
                     "Right-click the tray icon to quit.",
                     QSystemTrayIcon.MessageIcon.Information,

@@ -215,7 +215,7 @@ class _VPNStepMac(_VPNStepBase):
     title = "Enable & Connect VPN"
     subtitle = "Secure your connection with a private tunnel"
     detail = (
-        "Resistine installs a system network extension, then connects you to a "
+        "Phoenix installs a system network extension, then connects you to a "
         "secure VPN. Approving the extension is a one-time step in System "
         "Settings."
     )
@@ -243,7 +243,7 @@ class _VPNStepMac(_VPNStepBase):
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[VPN-SETUP] activate_extension failed: {e}")
         self._open_settings()
-        on_status("Approve the Resistine extension in System Settings — this "
+        on_status("Approve the Phoenix extension in System Settings — this "
                   "continues automatically once enabled.")
         import time
         deadline = time.time() + 300
@@ -281,7 +281,7 @@ class _VPNStepMac(_VPNStepBase):
         return [
             "A macOS dialog appears — click “Open System Settings”.",
             where,
-            "Enable the Resistine extension and click Allow.",
+            "Enable the Phoenix extension and click Allow.",
         ]
 
 
@@ -289,7 +289,7 @@ class _VPNStepWindows(_VPNStepBase):
     title = "Set Up & Connect VPN"
     subtitle = "Install WireGuard to secure your connection"
     detail = (
-        "Resistine's VPN is powered by WireGuard. Install it once and Resistine "
+        "Phoenix's VPN is powered by WireGuard. Install it once and Phoenix "
         "connects and manages the secure tunnel for you."
     )
     instructions = [
@@ -326,7 +326,7 @@ class _VPNStepLinux(_VPNStepBase):
     title = "Set Up & Connect VPN"
     subtitle = "Install WireGuard to secure your connection"
     detail = (
-        "Resistine's VPN is powered by WireGuard. We'll install the tools and "
+        "Phoenix's VPN is powered by WireGuard. We'll install the tools and "
         "connect you — you may be asked for your password."
     )
     primary_label = "Set Up VPN"
@@ -361,7 +361,7 @@ class _AntivirusStepMac(SetupStep):
     title = "Turn On Antivirus"
     subtitle = "Real-time malware scanning with ClamAV"
     detail = (
-        "Resistine downloads virus definitions and installs the ClamAV scanning "
+        "Phoenix downloads virus definitions and installs the ClamAV scanning "
         "service. You'll be asked once for your administrator password, then to "
         "approve it in System Settings — first in Login Items & Extensions, then "
         "Full Disk Access."
@@ -369,7 +369,7 @@ class _AntivirusStepMac(SetupStep):
     instructions = [
         "Click “Enable Antivirus” and enter your administrator password.",
         "Enable all the ClamAV items under Login Items & Extensions.",
-        "Then grant Resistine Full Disk Access when prompted — protection turns "
+        "Then grant Phoenix Full Disk Access when prompted — protection turns "
         "on automatically.",
     ]
     primary_label = "Enable Antivirus"
@@ -443,7 +443,7 @@ class _AntivirusStepMac(SetupStep):
 
         def _work():
             # Self-heal stale state from a previous install. Settings live in
-            # ~/Library/Application Support/Resistine and SURVIVE an app
+            # ~/Library/Application Support/Phoenix and SURVIVE an app
             # uninstall, so a dev uninstall/reinstall can leave
             # setup_state="completed" while the system files and — critically —
             # the SMAppService "Login Items & Extensions" registration are gone.
@@ -571,7 +571,7 @@ class _AntivirusStepMac(SetupStep):
                         logger.info("[AV-SETUP] opening Full Disk Access")
                         self._open_pane("open_fda_settings")
                         opened_fda = True
-                    on_status("Step 2 of 2 — turn on Full Disk Access for Resistine "
+                    on_status("Step 2 of 2 — turn on Full Disk Access for Phoenix "
                               "under System Settings ▸ Privacy & Security… "
                               f"({elapsed}s)")
                 else:  # offline — actively (re)start the daemons
@@ -633,7 +633,7 @@ class _AntivirusStepDefender(SetupStep):
     title = "Turn On Antivirus"
     subtitle = "Enable real-time malware protection"
     detail = (
-        "Resistine turns on real-time antivirus protection. You may be asked to "
+        "Phoenix turns on real-time antivirus protection. You may be asked to "
         "approve an administrator prompt."
     )
     primary_label = "Enable Antivirus"
@@ -643,12 +643,12 @@ class _AntivirusStepDefender(SetupStep):
         super().__init__(app)
         if _PLATFORM == "Windows":
             self.detail = (
-                "Resistine enables Microsoft Defender real-time protection. "
+                "Phoenix enables Microsoft Defender real-time protection. "
                 "Approve the Windows prompt to continue."
             )
         else:
             self.detail = (
-                "Resistine installs and starts the ClamAV scanning service. "
+                "Phoenix installs and starts the ClamAV scanning service. "
                 "You may be asked for your password."
             )
 
@@ -844,7 +844,7 @@ class _EndpointStepMac(SetupStep):
     title = "Install Endpoint Monitoring"
     subtitle = "Detect threats with the SIEM agent"
     detail = (
-        "The Resistine endpoint agent watches your device for suspicious "
+        "The Phoenix endpoint agent watches your device for suspicious "
         "activity and reports it securely. You'll be asked once for your "
         "administrator password."
     )
@@ -1004,7 +1004,7 @@ class _EndpointStepDirect(SetupStep):
     title = "Install Endpoint Monitoring"
     subtitle = "Detect threats with the SIEM agent"
     detail = (
-        "The Resistine endpoint agent watches your device for suspicious "
+        "The Phoenix endpoint agent watches your device for suspicious "
         "activity and reports it securely. You may be asked to approve an "
         "administrator prompt."
     )

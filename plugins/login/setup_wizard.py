@@ -35,7 +35,7 @@ from utils import settings
 from utils.functions import get_resource_path
 from utils.logger import logger
 
-_BLUE = "#0D5394"
+_BLUE = "#1E6FD9"
 _BLUE_HOVER = "#0A4275"
 _GREEN = "#1E8E3E"
 _GREEN_HOVER = "#177B33"
@@ -127,7 +127,7 @@ class SetupWizardScreen:
         self._add_shield(col)
 
         col.addWidget(self._title_label(
-            "Let's finish setting up Resistine", 22))
+            "Let's finish setting up Phoenix", 22))
         col.addSpacing(8)
         col.addWidget(self._muted_label(
             "We'll turn on your protection in a few quick, guided steps.\n"
@@ -506,7 +506,7 @@ class SetupWizardScreen:
         try:
             from gui.qt_widgets import pixmap
             path = get_resource_path(
-                os.path.join("resources", "icons", "ResistineShield.png"))
+                os.path.join("resources", "icons", "PhoenixMark.png"))
             pm = pixmap(path, size)
             if not pm.isNull():
                 shield = QLabel()

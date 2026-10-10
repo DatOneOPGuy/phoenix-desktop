@@ -1,5 +1,5 @@
 {
-  description = "Resistine Desktop — PyQt6 security endpoint (VPN / antivirus / SIEM) manager";
+  description = "Phoenix Desktop — PyQt6 security endpoint (VPN / antivirus / SIEM) manager";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -68,7 +68,9 @@
       in
       {
         packages = rec {
-          default = resistine;
+          default = phoenix;
+          # Pre-rebrand attribute name, kept so existing system configs build.
+          resistine = phoenix;
 
           # The exact ClamAV the wrapper below puts on the app's PATH, exported
           # so a system config can install *this* one rather than whatever its
@@ -80,8 +82,8 @@
           # this attribute keeps both paths on one version that has the cert.
           inherit (pkgs) clamav;
 
-          resistine = pkgs.stdenv.mkDerivation {
-            pname = "resistine";
+          phoenix = pkgs.stdenv.mkDerivation {
+            pname = "phoenix";
             inherit version;
 
             src = ./.;
@@ -125,21 +127,21 @@
             installPhase = ''
               runHook preInstall
 
-              mkdir -p $out/bin $out/share/resistine
-              cp -r main.py gui plugins utils resources docs $out/share/resistine/
+              mkdir -p $out/bin $out/share/phoenix
+              cp -r main.py gui plugins utils resources docs $out/share/phoenix/
 
               # utils/updates/version.py parses VERSION out of the PyInstaller
               # spec when not running frozen, so the spec has to ship too.
               install -Dm644 packaging/Resistine.spec \
-                $out/share/resistine/packaging/Resistine.spec
+                $out/share/phoenix/packaging/Resistine.spec
 
-              install -Dm644 LICENSE.md $out/share/resistine/LICENSE.md
-              install -Dm644 LICENSE-3rd-Party.md $out/share/resistine/LICENSE-3rd-Party.md
+              install -Dm644 LICENSE.md $out/share/phoenix/LICENSE.md
+              install -Dm644 LICENSE-3rd-Party.md $out/share/phoenix/LICENSE-3rd-Party.md
 
-              install -Dm644 packaging/linux/resistine.desktop \
-                $out/share/applications/resistine.desktop
+              install -Dm644 packaging/linux/phoenix.desktop \
+                $out/share/applications/phoenix.desktop
               install -Dm644 resources/icons/app_icon.png \
-                $out/share/icons/hicolor/256x256/apps/resistine.png
+                $out/share/icons/hicolor/256x256/apps/phoenix.png
 
               runHook postInstall
             '';
@@ -151,27 +153,27 @@
             # icon visible to the desktop environment).
             dontWrapQtApps = true;
             postFixup = ''
-              makeQtWrapper ${pythonEnv}/bin/python $out/bin/resistine \
-                --add-flags "$out/share/resistine/main.py" \
+              makeQtWrapper ${pythonEnv}/bin/python $out/bin/phoenix \
+                --add-flags "$out/share/phoenix/main.py" \
                 --suffix PATH : ${lib.makeBinPath runtimeBins}
             '';
 
             meta = {
-              description = "Resistine security desktop: VPN (WireGuard), antivirus (ClamAV), SIEM (Wazuh) and AI chat";
+              description = "Phoenix security desktop: VPN (WireGuard), antivirus (ClamAV), SIEM (Wazuh) and AI chat";
               homepage = "https://github.com/Resistine/Resistine-Desktop";
               license = lib.licenses.gpl2Plus;
               platforms = lib.platforms.linux;
-              mainProgram = "resistine";
+              mainProgram = "phoenix";
             };
           };
         };
 
         apps.default = {
           type = "app";
-          program = "${self.packages.${system}.resistine}/bin/resistine";
+          program = "${self.packages.${system}.phoenix}/bin/phoenix";
         };
 
-        checks.default = self.packages.${system}.resistine;
+        checks.default = self.packages.${system}.phoenix;
 
         devShells = {
           # Default shell: every Python dep comes from nixpkgs, so `python
@@ -187,7 +189,7 @@
             env.QT_PLUGIN_PATH = lib.makeSearchPath pkgs.qt6.qtbase.qtPluginPrefix qtDeps;
 
             shellHook = ''
-              echo "Resistine dev shell (PyQt6, Python ${python.pythonVersion}, deps from nixpkgs)"
+              echo "Phoenix dev shell (PyQt6, Python ${python.pythonVersion}, deps from nixpkgs)"
               echo
               echo "  python main.py       run the app"
               echo "  python main.py -d    debug mode + runtime inspector"
@@ -251,7 +253,7 @@
                 . .venv/bin/activate
               fi
 
-              echo "Resistine dev shell (.venv / uv)"
+              echo "Phoenix dev shell (.venv / uv)"
               echo "  python main.py       run the app"
               echo "  ./run_tests.sh       tests"
             '';

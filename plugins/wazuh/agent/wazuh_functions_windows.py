@@ -36,7 +36,7 @@ from plugins.wazuh.config import (
 
 _OSSEC_CONF = os.path.join(WINDOWS_WAZUH_DIR, "ossec.conf")
 _CLIENT_KEYS = os.path.join(WINDOWS_WAZUH_DIR, "client.keys")
-_KEY_BACKUP = os.path.join(os.environ.get("APPDATA", ""), "Resistine", "wazuh_client.keys")
+_KEY_BACKUP = os.path.join(os.environ.get("APPDATA", ""), "Phoenix", "wazuh_client.keys")
 _AGENT_AUTH = os.path.join(WINDOWS_WAZUH_DIR, "agent-auth.exe")
 _SERVICE_NAME = "WazuhSvc"
 
@@ -95,7 +95,7 @@ def get_agent_name():
     # derived from the GUID so Wazuh enrollment still gets a unique value.
     if guid:
         return f"agent-{guid.replace('-', '')[-12:].upper()}"
-    return "resistine-agent"
+    return "phoenix-agent"
 
 
 def get_agent_group():

@@ -398,7 +398,7 @@ def system_clamd_running() -> bool:
     We deliberately do NOT rely on ``_ping_socket`` here.  On Fedora
     the stock SELinux targeted policy forbids ordinary user domains
     (``user_t``/``staff_t``/``xdm_t``) from connecting to a
-    ``clamd_var_run_t`` socket, so a direct probe from the Resistine UI
+    ``clamd_var_run_t`` socket, so a direct probe from the Phoenix UI
     process would always fail even when the daemon is healthy and
     clamonacc (running as ``clamscan``) is happily connected.  The
     authoritative signal is systemd's view of the unit plus the
@@ -515,7 +515,7 @@ def _prepare_config_script() -> str:
     # LocalSocketMode 0666 is important: when unset, clamd creates the
     # socket using the service's umask (0022 on Fedora), yielding mode
     # 0644 — which lets only the owning "clamscan" user connect.  The
-    # Resistine UI polls the socket as the regular desktop user, so
+    # Phoenix UI polls the socket as the regular desktop user, so
     # without 0666 we'd get EACCES and the status card would
     # permanently read "Protection Offline" even though clamd is
     # running.

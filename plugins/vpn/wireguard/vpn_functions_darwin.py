@@ -580,7 +580,7 @@ _EXTENSION_CACHE_TTL = 2  # seconds
 
 
 def is_extension_enabled():
-    """Check if the Resistine network extension is enabled in Login Items & Extensions.
+    """Check if the Phoenix network extension is enabled in Login Items & Extensions.
 
     Uses systemextensionsctl to verify the extension is both activated AND enabled.
     A NETunnelProviderManager can exist in preferences even when the extension is

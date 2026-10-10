@@ -1,6 +1,6 @@
 ## @file main.py
 ## @namespace main
-"""Entry point for the Resistine AI EndPoint application (PyQt6).
+"""Entry point for the Phoenix AI EndPoint application (PyQt6).
 
 Author: Petr, Javier, Jackie and the Resistine Team
 Copyright (c) Resistine 2025
@@ -66,11 +66,11 @@ def _build_app() -> tuple[QApplication, object]:
     """Create the QApplication + main window and wire startup services."""
     _set_resolution_scaling()
     qt_app = QApplication(sys.argv)
-    qt_app.setApplicationName("Resistine")
-    qt_app.setApplicationDisplayName("Resistine")
+    qt_app.setApplicationName("Phoenix")
+    qt_app.setApplicationDisplayName("Phoenix")
     # Drives the GNOME dock-tile/.desktop association on Linux (parallels the
     # WM_CLASS approach the CTk app used). Harmless elsewhere.
-    qt_app.setDesktopFileName("resistine")
+    qt_app.setDesktopFileName("phoenix")
 
     from gui.app_window import AppWindow
 
@@ -79,6 +79,10 @@ def _build_app() -> tuple[QApplication, object]:
     # Login plugin is uninstallable via the Store; respect that here so
     # users who removed it don't get the login screen on next launch.
     login_uninstalled = _is_login_plugin_uninstalled()
+
+    if settings.get("auth", "logged_in", False) and not _session_still_valid():
+        logger.info("🔐 Phoenix session ended on the server — signing in again.")
+        settings.clear_namespace("auth")
 
     if settings.get("auth", "logged_in", False) or login_uninstalled:
         if login_uninstalled:
@@ -125,6 +129,18 @@ def _build_app() -> tuple[QApplication, object]:
     return qt_app, window
 
 
+def _session_still_valid() -> bool:
+    """False only when MAS rejected the stored session (signed out elsewhere).
+
+    Offline or no MAS session (legacy OTP login) counts as valid."""
+    try:
+        from plugins.login.oidc import validate_session
+        return validate_session()
+    except Exception as e:
+        logger.warning(f"Session check skipped: {e}")
+        return True
+
+
 def _is_login_plugin_uninstalled() -> bool:
     """Return True if the user uninstalled the Login plugin via the Store."""
     try:
@@ -168,7 +184,7 @@ def main() -> int:
     suppress_child_console_windows()
 
     parser = argparse.ArgumentParser(
-        description="Resistine Desktop Application",
+        description="Phoenix Desktop Application",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("-d", "--debug", action="store_true",
@@ -190,6 +206,8 @@ def main() -> int:
         a in sys.argv for a in ["-l", "--log-level"]
     ):
         log_level = "DEBUG"
+    # Before the file log sink creates the new config dir.
+    settings.migrate_legacy_config_dir()
     setup_logging(level=log_level)
 
     qt_app, window = _build_app()
