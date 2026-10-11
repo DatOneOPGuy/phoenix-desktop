@@ -1113,10 +1113,11 @@ class Plugin(BasePlugin):
                     from plugins.antivirus.clamav_platform_linux import (
                         activate_system_daemons,
                     )
-                    activate_system_daemons()
-                except Exception:
-                    pass
-                self.app.after(0, self._update_realtime_status)
+                    ok, msg = activate_system_daemons()
+                except Exception as e:
+                    ok, msg = False, str(e)
+                # Same as Start Protection: say why it failed (e.g. NixOS).
+                self.app.after(0, self._handle_protection_started, ok, msg)
         else:
             # Windows: Defender setup is owned by the OS; nothing to do here.
             self._update_realtime_status()
