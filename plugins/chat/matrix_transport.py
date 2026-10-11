@@ -242,6 +242,7 @@ class MatrixService:
         if not isinstance(who, WhoamiResponse):
             self._error = f"The Matrix server rejected the session ({who})."
             return
+        await self._ensure_device_keys_published()
         if client.should_upload_keys:
             await client.keys_upload()
 
@@ -252,6 +253,33 @@ class MatrixService:
         logger.info(f"[CHAT-MATRIX] ready: {self.user_id} ({self.device_id}) ↔ {self.bot} in {self.room_id}")
         self._ready.set()
         await sync_task
+
+    async def _ensure_device_keys_published(self) -> None:
+        """Re-upload this device's identity keys if the server lost them.
+
+        A revoked Phoenix session deletes the device, and its E2EE keys, on
+        the server; signing in again recreates the same device id without
+        keys. nio's store still says the account is shared, so it would never
+        upload them again, and the bot, finding no keys for this device,
+        never shares its reply keys with it (every reply undecryptable).
+        """
+        from nio import KeysQueryResponse
+
+        client = self._client
+        if not client.olm.account.shared:
+            return  # first start: the normal keys_upload publishes them
+        client.olm.users_for_key_query.add(self.user_id)
+        resp = await client.keys_query()
+        if not isinstance(resp, KeysQueryResponse):
+            logger.warning(f"[CHAT-MATRIX] own device key check failed: {resp}")
+            return
+        published = (resp.device_keys.get(self.user_id) or {}).get(self.device_id) or {}
+        ours = client.olm.account.identity_keys["ed25519"]
+        if (published.get("keys") or {}).get(f"ed25519:{self.device_id}") == ours:
+            return
+        logger.info(f"[CHAT-MATRIX] server has no keys for device {self.device_id}; re-uploading")
+        client.olm.account.shared = False
+        await client.keys_upload()
 
     async def _sync_loop(self) -> None:
         """sync_forever with token refresh: MAS access tokens expire."""
