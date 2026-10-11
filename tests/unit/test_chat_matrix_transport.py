@@ -157,7 +157,7 @@ class TestCollect:
         assert collect([("message", REPLY, reply("Hi"))], cancel=cancel) == []
 
 
-def key_check(published_ed25519):
+def key_check(published_ed25519, shared=True):
     """Run _ensure_device_keys_published against a fake client."""
     import asyncio
 
@@ -165,7 +165,7 @@ def key_check(published_ed25519):
 
     svc = mt.MatrixService("https://hs", "@me:hs", "DEV", "@bot:hs")
     client = MagicMock()
-    client.olm.account.shared = True
+    client.olm.account.shared = shared
     client.olm.account.identity_keys = {"ed25519": "OURS"}
     client.olm.users_for_key_query = set()
     devices = {} if published_ed25519 is None else {
@@ -197,6 +197,14 @@ class TestDeviceKeyRepublish:
         client = key_check(published)
         assert client.olm.account.shared is False
         client.keys_upload.assert_called_once()
+
+    @pytest.mark.parametrize("published", [None, "STALE"])
+    def test_new_store_left_to_normal_upload(self, published):
+        # Fresh crypto store under a reused device ID: the regular
+        # keys_upload in _main publishes (and replaces) the keys.
+        client = key_check(published, shared=False)
+        assert client.olm.account.shared is False
+        client.keys_upload.assert_not_called()
 
 
 @pytest.mark.unit
