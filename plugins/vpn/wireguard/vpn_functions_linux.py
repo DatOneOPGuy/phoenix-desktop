@@ -461,15 +461,28 @@ def stop_vpn(config_path):
             logger.error(f"Refusing to stop VPN: invalid interface name {iface!r}")
             return False
         etc_conf = f"/etc/wireguard/{iface}.conf"
-        # Use interface name so AppArmor-confined wg-quick (Ubuntu) can access
-        # the config; clean up the /etc/wireguard copy afterwards.
-        script = (
-            f"wg-quick down {shlex.quote(iface)}; rm -f {shlex.quote(etc_conf)}"
-        )
+        if _is_nixos():
+            # Started from the config in place (see start_vpn): no /etc copy.
+            script = f"wg-quick down {shlex.quote(config_path)}"
+        else:
+            # Use interface name so AppArmor-confined wg-quick (Ubuntu) can
+            # access the config; clean up the /etc/wireguard copy afterwards.
+            script = (
+                f"wg-quick down {shlex.quote(iface)}; rm -f {shlex.quote(etc_conf)}"
+            )
         result = run_privileged_command(["sh", "-c", script])
         return result is not None and result.returncode == 0
     except Exception as e:
         logger.error(f"Failed to stop VPN service: {e}")
+        return False
+
+
+def _is_nixos():
+    """NixOS: /etc is read-only (managed by the system config)."""
+    try:
+        with open("/etc/os-release", encoding="utf-8") as f:
+            return any(line.strip() in ("ID=nixos", 'ID="nixos"') for line in f)
+    except OSError:
         return False
 
 
@@ -593,13 +606,20 @@ def start_vpn(config_path):
         # Adapt DNS handling to whatever this host provides (resolvconf vs
         # resolvectl) so wg-quick doesn't fail on a missing resolvconf.
         src_conf = make_dns_compatible_config(config_path)
-        # Copy into /etc/wireguard/ first — Ubuntu's AppArmor profile for
-        # wg-quick only permits reading configs from that directory.
-        script = (
-            f"cp {shlex.quote(src_conf)} {shlex.quote(etc_conf)} && "
-            f"chmod 600 {shlex.quote(etc_conf)} && "
-            f"wg-quick up {shlex.quote(iface)}"
-        )
+        if _is_nixos():
+            # /etc is read-only on NixOS: run wg-quick on the user's config
+            # (~/.config/phoenix/wireguard/<iface>.conf, 0600) in place. The
+            # interface name comes from the file name, so use the stored file
+            # (NixOS always has resolvconf, so no DNS-compat copy is needed).
+            script = f"wg-quick up {shlex.quote(config_path)}"
+        else:
+            # Copy into /etc/wireguard/ first — Ubuntu's AppArmor profile for
+            # wg-quick only permits reading configs from that directory.
+            script = (
+                f"cp {shlex.quote(src_conf)} {shlex.quote(etc_conf)} && "
+                f"chmod 600 {shlex.quote(etc_conf)} && "
+                f"wg-quick up {shlex.quote(iface)}"
+            )
         result = run_privileged_command(["sh", "-c", script])
         return result is not None and result.returncode == 0
     except Exception as e:
