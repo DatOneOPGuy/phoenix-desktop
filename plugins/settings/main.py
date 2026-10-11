@@ -522,7 +522,8 @@ class Plugin(BasePlugin):
                 stop_vpn(mgr.get_active_config_path() or "")
             elif system == "Windows":
                 from plugins.vpn.wireguard.vpn_windows_client import disconnect
-                disconnect("resistine")
+                from plugins.vpn.config_manager import PHOENIX_CONFIG_NAME
+                disconnect(PHOENIX_CONFIG_NAME)
             elif system == "Linux":
                 from plugins.vpn.config_manager import VPNConfigManager
                 from plugins.vpn.wireguard.vpn_functions_linux import (

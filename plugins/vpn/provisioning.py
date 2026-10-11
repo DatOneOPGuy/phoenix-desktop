@@ -29,7 +29,7 @@ API_URL = "https://api.phoenix.exposed"
 _TIMEOUT = 20
 # The server-issued config uses the config manager's built-in name, so the
 # VPN screen shows it as "Phoenix (Default)".
-CONFIG_NAME = "resistine"
+from plugins.vpn.config_manager import PHOENIX_CONFIG_NAME as CONFIG_NAME  # noqa: E402
 
 
 class ProvisioningError(Exception):

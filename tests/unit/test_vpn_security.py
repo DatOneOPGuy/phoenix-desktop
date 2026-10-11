@@ -26,7 +26,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from plugins.vpn.config_manager import RESISTINE_CONFIG_NAME, VPNConfigManager
+from plugins.vpn.config_manager import PHOENIX_CONFIG_NAME, VPNConfigManager
 from plugins.vpn.wireguard import config_validation as cv
 
 POSIX = os.name == "posix"
@@ -324,11 +324,11 @@ class TestConfigManagerTraversal:
 
     def test_tampered_active_setting_ignored(self, mgr, wireguard_dir, write_conf, isolated_settings):
         (wireguard_dir.parent / "outside.conf").write_text("[Interface]\n")
-        write_conf(RESISTINE_CONFIG_NAME)
+        write_conf(PHOENIX_CONFIG_NAME)
         isolated_settings.set("vpn", "active_config", "../outside")
-        assert mgr.get_active_config_name() == RESISTINE_CONFIG_NAME
+        assert mgr.get_active_config_name() == PHOENIX_CONFIG_NAME
         assert mgr.get_active_config_path() == os.path.join(
-            str(wireguard_dir), f"{RESISTINE_CONFIG_NAME}.conf"
+            str(wireguard_dir), f"{PHOENIX_CONFIG_NAME}.conf"
         )
 
     def test_delete_config_rejects_traversal(self, mgr, wireguard_dir):

@@ -501,7 +501,7 @@ class TestDisconnectVpn:
                  create=True,
              ) as mock_disc:
             settings_plugin._disconnect_vpn()
-            mock_disc.assert_called_once_with("resistine")
+            mock_disc.assert_called_once_with("phoenix")
 
     def test_linux(self, settings_plugin):
         mock_mgr = MagicMock()
