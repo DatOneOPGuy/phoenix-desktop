@@ -255,7 +255,7 @@ def setup_vpn_keys() -> str | None:
 
 def parse_and_create_vpn_config(
     vpn_config_json_string: str,
-    config_name: str = "resistine",
+    config_name: str = "phoenix",
 ) -> str | None:
     try:
         if not vpn_config_json_string:
@@ -378,7 +378,7 @@ def parse_and_create_vpn_config(
 
 def save_vpn_configuration(
     vpn_config_json: str,
-    config_name: str = "resistine",
+    config_name: str = "phoenix",
 ) -> str | None:
     """Alias for parse_and_create_vpn_config."""
     return parse_and_create_vpn_config(vpn_config_json, config_name)

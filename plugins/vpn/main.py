@@ -740,7 +740,7 @@ class Plugin(BasePlugin):
             self.config_selector.activated.connect(self._on_config_activated)
             sel_lay.addWidget(self.config_selector, 1)
 
-            if selected_conf_file and not self.config_manager.is_resistine_config(
+            if selected_conf_file and not self.config_manager.is_default_config(
                 selected_conf_file
             ):
                 del_btn = QPushButton("Delete")
