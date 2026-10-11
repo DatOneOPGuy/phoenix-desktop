@@ -23,6 +23,7 @@ from __future__ import annotations
 import base64
 import os
 import platform
+import subprocess
 import threading
 
 from PyQt6.QtCore import Qt
@@ -122,8 +123,9 @@ def _resolve_wireguard_folder() -> str:
 
 wireguard_folder = _resolve_wireguard_folder()
 
-# DNS Configuration - Change this value to update DNS across the application
-DNS_SERVER = "10.49.11.10"
+# DNS Configuration - used as the connectivity-check target and as the DNS
+# shown when a config has none. Override with RESISTINE_DNS_SERVER.
+DNS_SERVER = os.environ.get("RESISTINE_DNS_SERVER", "10.49.11.10")
 
 # Module-level state preserved from the original (wazuh imports is_vpn_connected).
 active_client_name = None
@@ -163,6 +165,42 @@ def _safe_extension_enabled() -> bool:
         return bool(is_extension_enabled())
     except Exception:
         return True
+
+
+def _list_wg_interfaces() -> list[str]:
+    """Return the WireGuard interfaces reported by ``wg show interfaces``.
+
+    Returns [] if wg is not installed, fails (e.g. lacks privileges) or hangs.
+    """
+    try:
+        result = subprocess.run(
+            ["wg", "show", "interfaces"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except FileNotFoundError:
+        logger.info("WireGuard 'wg' tool not found; assuming no active interfaces")
+        return []
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.warning(f"⚠️ Could not enumerate WireGuard interfaces: {e}")
+        return []
+    if result.returncode != 0:
+        logger.warning(
+            f"⚠️ 'wg show interfaces' failed ({result.returncode}): "
+            f"{(result.stderr or '').strip()}"
+        )
+        return []
+    return result.stdout.split()
+
+
+def _conf_path(config_name: str) -> str:
+    """Path of ``<config_name>.conf`` inside wireguard_folder.
+
+    Raises ValueError for names that could escape the folder.
+    """
+    return _config_manager.config_path(config_name)
 
 
 # --- Initialization Logic ---
@@ -215,11 +253,7 @@ def initialize_vpn_status():
             my_vpn_status = "Stopped"
 
     elif IS_LINUX:
-        try:
-            existing_interfaces = os.popen("wg show interfaces").read().split()
-        except Exception as e:
-            logger.warning(f"⚠️ Could not enumerate WireGuard interfaces: {e}")
-            existing_interfaces = []
+        existing_interfaces = _list_wg_interfaces()
 
     # On Linux/Windows, find the active interface by polling each known one.
     if not IS_MACOS:
@@ -492,7 +526,11 @@ class Plugin(BasePlugin):
         }
 
     def get_configuration_values(self, tunnel_name):
-        conf_file_path = os.path.join(wireguard_folder, f"{tunnel_name}.conf")
+        try:
+            conf_file_path = _conf_path(tunnel_name)
+        except ValueError as e:
+            logger.error(f"Refusing to read config: {e}")
+            return {}
         logger.info(f"Reading configuration from: {conf_file_path}")
         data = {}
 
@@ -1001,9 +1039,14 @@ class Plugin(BasePlugin):
         is_running = current.get("state") == "Running"
 
         if switch_value == 1 and not is_running:
-            config_path = os.path.join(
-                wireguard_folder, f"{selected_conf_file}.conf"
-            )
+            try:
+                config_path = _conf_path(selected_conf_file)
+            except ValueError as e:
+                logger.error(f"Refusing to connect: {e}")
+                self.app.after(
+                    0, self.app.show_notification, "Invalid VPN configuration name", "error"
+                )
+                return
             result = connect(selected_conf_file, config_path=config_path)
             if result.get("status") != "ok" and result.get("state") not in (
                 "Starting", "Running",
@@ -1052,7 +1095,14 @@ class Plugin(BasePlugin):
             )
             return
 
-        config_path = os.path.join(wireguard_folder, f"{tunnel_name}.conf")
+        try:
+            config_path = _conf_path(tunnel_name)
+        except ValueError as e:
+            logger.error(f"❌ {e}")
+            self.app.after(
+                0, self.app.show_notification, "Invalid VPN configuration name", "error"
+            )
+            return
 
         if IS_MACOS:
             if not _safe_extension_enabled():
@@ -1129,7 +1179,7 @@ class Plugin(BasePlugin):
                 return False
             if IS_WINDOWS:
                 return bool(stop_vpn(name))
-            path = config_path or os.path.join(wireguard_folder, f"{name}.conf")
+            path = config_path or _conf_path(name)
             return bool(stop_vpn(path))
         except Exception as e:
             logger.error(f"stop_vpn failed: {e}")
@@ -1213,7 +1263,12 @@ class Plugin(BasePlugin):
         """Open a modal dialog showing the config file with a copy button."""
         from PyQt6.QtWidgets import QDialog
 
-        conf_file_path = os.path.join(wireguard_folder, f"{tunnel_name}.conf")
+        try:
+            conf_file_path = _conf_path(tunnel_name)
+        except ValueError as e:
+            logger.error(f"Refusing to show config: {e}")
+            self.app.show_notification("Invalid configuration name", type="error")
+            return
         if not os.path.exists(conf_file_path):
             self.app.show_notification("Config file not found", type="error")
             return

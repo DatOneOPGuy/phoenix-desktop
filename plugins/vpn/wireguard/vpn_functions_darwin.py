@@ -14,6 +14,24 @@ from typing import Optional, Tuple
 
 from utils import settings
 from utils.logger import logger
+from plugins.vpn.wireguard.config_validation import (
+    validate_config_name,
+    validate_server_config,
+    validate_wg_field,
+)
+
+
+def _restrict_dir_permissions(path):
+    """Ensure the WireGuard config dir is private (0o700).
+
+    makedirs(mode=...) is subject to the umask and does not touch an existing
+    directory, so chmod explicitly. Failures are logged, not fatal.
+    """
+    try:
+        if (os.stat(path).st_mode & 0o777) != 0o700:
+            os.chmod(path, 0o700)
+    except OSError as e:
+        logger.warning(f"Could not restrict permissions on {path}: {e}")
 
 
 def get_writable_wireguard_dir():
@@ -29,7 +47,8 @@ def get_writable_wireguard_dir():
         home, "Library", "Group Containers", "group.Resistine.WireguardTest"
     )
     wireguard_dir = os.path.join(app_group_container, "wireguard")
-    os.makedirs(wireguard_dir, exist_ok=True)
+    os.makedirs(wireguard_dir, mode=0o700, exist_ok=True)
+    _restrict_dir_permissions(wireguard_dir)
     return wireguard_dir
 
 
@@ -417,6 +436,19 @@ def parse_and_create_vpn_config(vpn_config_json_string, config_name="resistine")
         private_key = get_wireguard_private_key()
         if not private_key:
             logger.error("❌ Error: Private key not found in keychain")
+            return None
+
+        # Validate every server-provided value (and the config name, which
+        # becomes a file path) before anything is written, so a malicious API
+        # response can't inject extra lines such as PostUp into the .conf.
+        try:
+            validate_config_name(config_name)
+            validate_wg_field(private_key, "PrivateKey")
+            validate_server_config(
+                server_public_key, endpoint, client_address, allowed_ips, dns_servers
+            )
+        except ValueError as e:
+            logger.error(f"Rejected invalid VPN config from server: {e}")
             return None
 
         # Convert AllowedIPs array to comma-separated string
