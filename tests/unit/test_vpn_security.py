@@ -411,15 +411,18 @@ class TestLinuxShellSafety:
         conf = weird_dir / "resistine.conf"
         conf.write_text("[Interface]\n")
         ok = MagicMock(returncode=0)
+        wgq = "/nix/store/abc-wireguard-tools/bin/wg-quick"
         with patch.object(l, "run_privileged_command", return_value=ok) as rpc, \
-                patch.object(l, "_is_nixos", return_value=True):
+                patch.object(l, "_is_nixos", return_value=True), \
+                patch.object(l.shutil, "which", side_effect=lambda n: wgq if n == "wg-quick" else None):
             assert l.start_vpn(str(conf)) is True
             up = rpc.call_args[0][0][2]
             assert l.stop_vpn(str(conf)) is True
             down = rpc.call_args[0][0][2]
         for script, verb in ((up, "up"), (down, "down")):
             assert "/etc/wireguard" not in script
-            assert script.startswith(f"wg-quick {verb} ")
+            # absolute path: pkexec's PATH has no wg-quick on NixOS
+            assert script.startswith(f"{wgq} {verb} ")
             # the full path is passed, quoted (apostrophe escaped)
             assert "'\"'\"'" in script and script.endswith("resistine.conf'")
 

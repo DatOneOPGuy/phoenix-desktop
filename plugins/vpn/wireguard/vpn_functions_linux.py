@@ -463,18 +463,29 @@ def stop_vpn(config_path):
         etc_conf = f"/etc/wireguard/{iface}.conf"
         if _is_nixos():
             # Started from the config in place (see start_vpn): no /etc copy.
-            script = f"wg-quick down {shlex.quote(config_path)}"
+            script = f"{shlex.quote(_wg_quick())} down {shlex.quote(config_path)}"
         else:
             # Use interface name so AppArmor-confined wg-quick (Ubuntu) can
             # access the config; clean up the /etc/wireguard copy afterwards.
             script = (
-                f"wg-quick down {shlex.quote(iface)}; rm -f {shlex.quote(etc_conf)}"
+                f"{shlex.quote(_wg_quick())} down {shlex.quote(iface)}; rm -f {shlex.quote(etc_conf)}"
             )
         result = run_privileged_command(["sh", "-c", script])
         return result is not None and result.returncode == 0
     except Exception as e:
         logger.error(f"Failed to stop VPN service: {e}")
         return False
+
+
+def _wg_quick():
+    """Absolute path of wg-quick, resolved in the app's own environment.
+
+    pkexec resets PATH to /usr/sbin:/usr/bin:/sbin:/bin, which holds nothing
+    on NixOS (the app's package puts wireguard-tools on its own PATH only),
+    so the privileged shell gets the full path. nixpkgs' wg-quick is a
+    wrapper that brings its own dependencies (iproute2, procps, ...).
+    """
+    return shutil.which("wg-quick") or "wg-quick"
 
 
 def _is_nixos():
@@ -611,14 +622,14 @@ def start_vpn(config_path):
             # (~/.config/phoenix/wireguard/<iface>.conf, 0600) in place. The
             # interface name comes from the file name, so use the stored file
             # (NixOS always has resolvconf, so no DNS-compat copy is needed).
-            script = f"wg-quick up {shlex.quote(config_path)}"
+            script = f"{shlex.quote(_wg_quick())} up {shlex.quote(config_path)}"
         else:
             # Copy into /etc/wireguard/ first — Ubuntu's AppArmor profile for
             # wg-quick only permits reading configs from that directory.
             script = (
                 f"cp {shlex.quote(src_conf)} {shlex.quote(etc_conf)} && "
                 f"chmod 600 {shlex.quote(etc_conf)} && "
-                f"wg-quick up {shlex.quote(iface)}"
+                f"{shlex.quote(_wg_quick())} up {shlex.quote(iface)}"
             )
         result = run_privileged_command(["sh", "-c", script])
         return result is not None and result.returncode == 0
