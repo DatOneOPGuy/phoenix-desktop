@@ -228,3 +228,26 @@ def validate_server_config(server_public_key, endpoint, client_address,
     validate_ip_list(client_address, "Address")
     validate_ip_list(allowed_ips, "AllowedIPs")
     validate_dns_list(dns_servers, "DNS")
+
+
+def optional_peer_lines(peer_config):
+    """Validated ``PresharedKey`` / ``PersistentKeepalive`` lines for [Peer].
+
+    The macOS/Linux writers build the .conf from fixed fields; these two are
+    optional (the Phoenix VPN server uses a per-device preshared key). Returns
+    the lines to append (possibly empty). Raises ValueError on a bad value.
+    """
+    lines = []
+    psk = peer_config.get("PresharedKey")
+    if psk:
+        validate_key(psk, "PresharedKey")
+        lines.append(f"PresharedKey = {psk}")
+    keepalive = peer_config.get("PersistentKeepalive")
+    if keepalive not in (None, ""):
+        keepalive = str(keepalive)
+        validate_token(keepalive, "PersistentKeepalive")
+        if not keepalive.isdigit() or not 0 <= int(keepalive) <= 65535:
+            raise ValueError("PersistentKeepalive must be 0-65535 seconds")
+        lines.append(f"PersistentKeepalive = {keepalive}")
+    return lines
+

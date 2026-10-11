@@ -555,8 +555,13 @@ class Plugin(BasePlugin):
     def _revoke_session(self):
         # End the MAS session too, so the device disappears from the
         # account's session list. Best effort: offline logout still works.
+        # First tell the Phoenix API this device signed out, which removes
+        # its VPN peer on the server; that call needs the still-valid token.
         try:
-            from plugins.login.oidc import revoke
+            from plugins.login.oidc import has_session, revoke
+            if has_session():
+                from plugins.vpn.provisioning import release_device
+                release_device()
             revoke()
         except Exception as e:
             logger.warning(f"Session revoke on logout failed: {e}")
