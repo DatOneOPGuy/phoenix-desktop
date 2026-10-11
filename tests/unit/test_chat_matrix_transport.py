@@ -157,6 +157,48 @@ class TestCollect:
         assert collect([("message", REPLY, reply("Hi"))], cancel=cancel) == []
 
 
+def key_check(published_ed25519):
+    """Run _ensure_device_keys_published against a fake client."""
+    import asyncio
+
+    from nio import KeysQueryResponse
+
+    svc = mt.MatrixService("https://hs", "@me:hs", "DEV", "@bot:hs")
+    client = MagicMock()
+    client.olm.account.shared = True
+    client.olm.account.identity_keys = {"ed25519": "OURS"}
+    client.olm.users_for_key_query = set()
+    devices = {} if published_ed25519 is None else {
+        "DEV": {"keys": {"ed25519:DEV": published_ed25519}}}
+
+    async def keys_query():
+        return KeysQueryResponse({"@me:hs": devices}, {})
+
+    async def keys_upload():
+        pass
+
+    client.keys_query = keys_query
+    client.keys_upload = MagicMock(side_effect=keys_upload)
+    svc._client = client
+    asyncio.run(svc._ensure_device_keys_published())
+    return client
+
+
+@pytest.mark.unit
+class TestDeviceKeyRepublish:
+    def test_keys_on_server_left_alone(self):
+        client = key_check("OURS")
+        assert client.olm.account.shared is True
+        client.keys_upload.assert_not_called()
+
+    @pytest.mark.parametrize("published", [None, "STALE"])
+    def test_missing_or_stale_keys_reuploaded(self, published):
+        # Revoked session → device (and its keys) deleted server-side.
+        client = key_check(published)
+        assert client.olm.account.shared is False
+        client.keys_upload.assert_called_once()
+
+
 @pytest.mark.unit
 class TestStreamControllerTransport:
     def test_transport_deltas_reach_queue_then_done(self):
