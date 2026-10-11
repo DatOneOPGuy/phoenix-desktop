@@ -69,6 +69,20 @@ def _is_arch_like() -> bool:
     return _distro_id() == "arch" or "arch" in _distro_id_like()
 
 
+def _is_nixos() -> bool:
+    return _distro_id() == "nixos"
+
+
+# NixOS builds /etc and the systemd units from the system configuration:
+# the app can't install packages, write clamd.conf or `systemctl enable`.
+_NIXOS_HINT = (
+    "On NixOS the ClamAV services come from your system configuration. Add "
+    "services.clamav.daemon.enable = true; services.clamav.updater.enable = true; "
+    "(and services.clamav.clamonacc.enable = true; for real-time protection), "
+    "run nixos-rebuild switch, then try again."
+)
+
+
 def _has_systemd() -> bool:
     return (
         shutil.which("systemctl") is not None
@@ -587,30 +601,41 @@ def activate_system_daemons() -> tuple[bool, str]:
             "init system (OpenRC, runit, etc.)."
         )
 
-    installed_ok, install_msg = _install_packages_if_missing()
-    if not installed_ok:
-        return False, install_msg
-
     clamd_svc, fresh_svc, onacc_svc = _service_names()
 
-    prep = _prepare_config_script()
-    # Freshclam first so the DB exists before clamd loads. clamonacc is
-    # best-effort (not all distros package it yet).  We use ``enable`` +
-    # ``restart`` (instead of ``enable --now``) so that re-running Start
-    # Protection picks up any config changes we just wrote in `prep` —
-    # e.g. the newly-added LocalSocketMode line.  ``restart`` is
-    # idempotent: it starts the service if it's stopped, and bounces it
-    # if it's running.
-    script = (
-        f"{prep}; "
-        f"systemctl daemon-reload; "
-        f"systemctl enable {fresh_svc} 2>/dev/null || true; "
-        f"systemctl restart {fresh_svc} 2>/dev/null || true; "
-        f"systemctl enable {clamd_svc}; "
-        f"systemctl restart {clamd_svc}; "
-        f"systemctl enable {onacc_svc} 2>/dev/null || true; "
-        f"systemctl restart {onacc_svc} 2>/dev/null || true"
-    )
+    if _is_nixos():
+        # Units exist only when services.clamav is enabled; then just start
+        # them (enabling is the system config's job).
+        if not _systemctl_has_unit(clamd_svc):
+            return False, _NIXOS_HINT
+        script = (
+            f"systemctl start {fresh_svc} 2>/dev/null || true; "
+            f"systemctl start {clamd_svc}; "
+            f"systemctl start {onacc_svc} 2>/dev/null || true"
+        )
+    else:
+        installed_ok, install_msg = _install_packages_if_missing()
+        if not installed_ok:
+            return False, install_msg
+
+        prep = _prepare_config_script()
+        # Freshclam first so the DB exists before clamd loads. clamonacc is
+        # best-effort (not all distros package it yet).  We use ``enable`` +
+        # ``restart`` (instead of ``enable --now``) so that re-running Start
+        # Protection picks up any config changes we just wrote in `prep` —
+        # e.g. the newly-added LocalSocketMode line.  ``restart`` is
+        # idempotent: it starts the service if it's stopped, and bounces it
+        # if it's running.
+        script = (
+            f"{prep}; "
+            f"systemctl daemon-reload; "
+            f"systemctl enable {fresh_svc} 2>/dev/null || true; "
+            f"systemctl restart {fresh_svc} 2>/dev/null || true; "
+            f"systemctl enable {clamd_svc}; "
+            f"systemctl restart {clamd_svc}; "
+            f"systemctl enable {onacc_svc} 2>/dev/null || true; "
+            f"systemctl restart {onacc_svc} 2>/dev/null || true"
+        )
     ok, out = _run_privileged(["sh", "-c", script], timeout=600)
     if not ok:
         return False, out or "Failed to enable ClamAV services."

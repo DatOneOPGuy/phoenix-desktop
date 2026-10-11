@@ -97,7 +97,7 @@ def ensure_desktop_entry():
             os.chmod(path, 0o644)
         except OSError:
             pass
-        logger.info("Installed desktop entry: %s", path)
+        logger.info(f"Installed desktop entry: {path}")
 
         # Refresh the desktop database so GNOME picks it up (non-blocking,
         # best-effort — not all systems have the tool).
@@ -112,4 +112,4 @@ def ensure_desktop_entry():
         except Exception:
             pass
     except Exception as e:
-        logger.debug("Could not install desktop entry: %s", e)
+        logger.debug(f"Could not install desktop entry: {e}")
