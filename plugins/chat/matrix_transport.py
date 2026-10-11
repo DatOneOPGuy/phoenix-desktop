@@ -266,16 +266,25 @@ class MatrixService:
         from nio import KeysQueryResponse
 
         client = self._client
-        if not client.olm.account.shared:
-            return  # first start: the normal keys_upload publishes them
         client.olm.users_for_key_query.add(self.user_id)
         resp = await client.keys_query()
         if not isinstance(resp, KeysQueryResponse):
             logger.warning(f"[CHAT-MATRIX] own device key check failed: {resp}")
             return
         published = (resp.device_keys.get(self.user_id) or {}).get(self.device_id) or {}
+        published_ed25519 = (published.get("keys") or {}).get(f"ed25519:{self.device_id}")
         ours = client.olm.account.identity_keys["ed25519"]
-        if (published.get("keys") or {}).get(f"ed25519:{self.device_id}") == ours:
+        if published_ed25519 == ours:
+            return
+        if not client.olm.account.shared:
+            # New crypto store (reinstall, wiped config or lost master key)
+            # under the hardware-derived device ID. keys_upload below replaces
+            # the keys; replies decrypt only if the bot accepts a known
+            # device's new keys (matrix_bridge accept_replaced_devices).
+            if published_ed25519:
+                logger.warning(
+                    f"[CHAT-MATRIX] device {self.device_id} had other identity keys "
+                    "(earlier install); publishing new ones")
             return
         logger.info(f"[CHAT-MATRIX] server has no keys for device {self.device_id}; re-uploading")
         client.olm.account.shared = False
