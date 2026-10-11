@@ -48,10 +48,14 @@ Request:
 Server steps:
 
 1. Validate `public_key` (base64, 32 bytes).
-2. Registry: if this device has a peer, keep its address and swap the key.
-   Otherwise allocate the next free address in `10.42.20.0/24` (from .10;
-   .2-.9 are the hand-made test peers) and a fresh preshared key.
-3. On the router: `phoenix-peer add <device_id> <public_key> <ip> <psk>`.
+2. Registry: if this device has a peer, keep its address and swap the key
+   (a new key gets a new preshared key). If the device ID is registered to
+   another account, refuse with 409: device IDs are only unique per user and
+   the client picks its own, so a matching ID proves nothing. Otherwise
+   allocate the next free address in `10.42.20.0/24` (from .10; .2-.9 are
+   the hand-made test peers) and a fresh preshared key.
+3. On the router: `phoenix-peer add <device_id> <public_key> <ip>`, the
+   preshared key on stdin (never in argv: process lists, error messages).
 4. Return the config.
 
 Response 200 (the same shape the old `/verify-otp` returned):
@@ -84,6 +88,7 @@ both as done). The app calls it on logout, before revoking its MAS session.
 |---|---|---|
 | 401 | token invalid/expired | refreshes once, then "Your Phoenix session ended. Sign in again." |
 | 403 | account has no VPN entitlement | "Your Phoenix account doesn't include VPN access." |
+| 409 | device ID registered to another account, or public key already in use | "Couldn't get a VPN config: <detail>" |
 | 422 | bad `public_key` | the `detail` |
 | 5xx / 503 | router or MAS unreachable | "Couldn't get a VPN config: <detail>" |
 
@@ -105,7 +110,7 @@ Reached over SSH with a dedicated key restricted in
 command="/usr/libexec/phoenix-peer",no-pty,no-port-forwarding,no-agent-forwarding,from="<briareosai IP>" ssh-ed25519 AAAA… phoenix-provisioning
 ```
 
-- `add <device_id> <pubkey> <ip> <psk>`: validate every argument strictly
+- `add <device_id> <pubkey> <ip>` + psk on stdin: validate every argument strictly
   (`^PHX_[A-Z2-7]{16}$`, WireGuard key, IP inside 10.42.20.0/24), replace any
   existing peer with that description, `uci commit network`, apply live with
   `wg set wg0 peer …` (not `ifup wg0`, which drops every tunnel).
