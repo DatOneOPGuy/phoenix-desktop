@@ -132,6 +132,15 @@ active_client_name = None
 my_vpn_status = "Stopped"
 
 
+def _phoenix_signed_in() -> bool:
+    """True when signed in with a Phoenix (MAS) account."""
+    try:
+        from plugins.login import oidc
+        return oidc.has_session()
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def is_vpn_connected():
     """Return True if VPN is currently connected.
 
@@ -990,6 +999,17 @@ class Plugin(BasePlugin):
         switch_value = self.vpn_toggle_switch.get()
 
         selected_conf_file = self.get_selected_conf_file_name()
+        if not selected_conf_file and switch_value and _phoenix_signed_in():
+            # Signed in with Phoenix but no config yet (e.g. after signing in
+            # again): get this device's config from the API, then connect.
+            self._toggle_busy = True
+            if self.vpn_toggle_switch is not None:
+                self.vpn_toggle_switch.setEnabled(False)
+            threading.Thread(
+                target=self._provision_then_connect, args=(switch_value,),
+                daemon=True,
+            ).start()
+            return
         if not selected_conf_file:
             logger.error("❌ Cannot toggle: No VPN config found.")
             self.app.show_notification(
@@ -1009,6 +1029,22 @@ class Plugin(BasePlugin):
             args=(switch_value, selected_conf_file),
             daemon=True,
         ).start()
+
+    def _provision_then_connect(self, switch_value):
+        """Worker: fetch this device's Phoenix VPN config, then connect."""
+        from plugins.vpn import provisioning
+        try:
+            name, _path = provisioning.ensure_vpn_config()
+        except provisioning.ProvisioningError as e:
+            logger.error(f"VPN provisioning failed: {e}")
+            self._toggle_busy = False
+            try:
+                self.app.after(0, self.app.show_notification, str(e), "error")
+                self.app.after(0, self.update_plugin, self.id)
+            except Exception:
+                pass
+            return
+        self._toggle_worker(switch_value, name)
 
     def _toggle_worker(self, switch_value, selected_conf_file):
         """Run the blocking connect/disconnect, then marshal UI back."""

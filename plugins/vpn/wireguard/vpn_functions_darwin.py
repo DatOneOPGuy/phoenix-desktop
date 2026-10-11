@@ -15,6 +15,7 @@ from typing import Optional, Tuple
 from utils import settings
 from utils.logger import logger
 from plugins.vpn.wireguard.config_validation import (
+    optional_peer_lines,
     validate_config_name,
     validate_server_config,
     validate_wg_field,
@@ -447,6 +448,7 @@ def parse_and_create_vpn_config(vpn_config_json_string, config_name="resistine")
             validate_server_config(
                 server_public_key, endpoint, client_address, allowed_ips, dns_servers
             )
+            extra_peer_lines = optional_peer_lines(peer_config)
         except ValueError as e:
             logger.error(f"Rejected invalid VPN config from server: {e}")
             return None
@@ -476,6 +478,8 @@ PublicKey = {server_public_key}
 AllowedIPs = {allowed_ips_str}
 Endpoint = {endpoint}
 """
+        if extra_peer_lines:
+            config_content += "\n".join(extra_peer_lines) + "\n"
 
         # Get writable WireGuard directory
         wireguard_dir = get_writable_wireguard_dir()

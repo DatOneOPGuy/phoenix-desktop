@@ -181,10 +181,14 @@ class _VPNStepBase(SetupStep):
                 return  # _failed already set
             name, path = _vpn_config()
             if not path:
-                self._failed = ("No VPN configuration found. Sign in again, then "
-                                "retry.")
-                logger.error("[VPN-SETUP] no active config to connect")
-                return
+                # Phoenix sign-in: get this device's config from the API.
+                from plugins.vpn import provisioning
+                try:
+                    name, path = provisioning.ensure_vpn_config(on_status)
+                except provisioning.ProvisioningError as e:
+                    self._failed = str(e)
+                    logger.error(f"[VPN-SETUP] provisioning failed: {e}")
+                    return
             if _vpn_status(name) == "Running":
                 logger.info("[VPN-SETUP] tunnel already up")
                 self._activated = True

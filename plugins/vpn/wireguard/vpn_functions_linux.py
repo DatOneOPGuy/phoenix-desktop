@@ -23,6 +23,7 @@ from utils.i18n import get_text
 from utils.logger import logger
 from plugins.vpn.wireguard.config_validation import (
     is_valid_config_name,
+    optional_peer_lines,
     validate_config_name,
     validate_server_config,
     validate_wg_field,
@@ -32,6 +33,7 @@ from utils.settings import get_config_dir
 # Removed standard logging setup
 
 # Keychain Constants
+# Legacy plaintext key file (pre-2026.10); migrated to encrypted settings.
 KEYS_FILE_PATH = os.path.join(get_config_dir(), "keys.json")
 
 # IPv4/IPv6 addresses and domain names only (used before interpolating DNS
@@ -203,36 +205,67 @@ def generate_wireguard_keys():
         return None
 
 
-def get_wireguard_private_key():
-    """Retrieve the WireGuard private key from the keys file."""
+def _settings():
+    from utils import settings
+    return settings
+
+
+def _migrate_legacy_keys():
+    """Move keys from the old plaintext keys.json into encrypted settings."""
+    if not os.path.exists(KEYS_FILE_PATH):
+        return
     try:
-        if os.path.exists(KEYS_FILE_PATH):
-            with open(KEYS_FILE_PATH, "r") as f:
-                keys = json.load(f)
-                return keys.get("private_key")
-        return None
+        with open(KEYS_FILE_PATH, "r") as f:
+            keys = json.load(f)
+        if keys.get("private_key") and keys.get("public_key"):
+            if not _save_secrets(keys["private_key"], keys["public_key"]):
+                return  # keep the file rather than lose the key
+        os.remove(KEYS_FILE_PATH)
+        logger.info("Moved WireGuard keys from keys.json to encrypted settings")
+    except Exception as e:
+        logger.error(f"Could not migrate legacy WireGuard keys: {e}")
+
+
+def _save_secrets(private_key, public_key):
+    s = _settings()
+    return bool(s.set_secret("wireguard", "private_key", private_key)
+                and s.set_secret("wireguard", "public_key", public_key))
+
+
+def get_wireguard_private_key():
+    """Retrieve the WireGuard private key (encrypted settings)."""
+    try:
+        _migrate_legacy_keys()
+        return _settings().get_secret("wireguard", "private_key")
     except Exception as e:
         logger.error(f"Error retrieving private key: {e}")
         return None
 
 
-def save_wireguard_keys(private_key, public_key):
-    """Save the WireGuard keys to the keys file securely."""
+def get_wireguard_public_key():
     try:
-        os.makedirs(os.path.dirname(KEYS_FILE_PATH), exist_ok=True)
-        keys = {"private_key": private_key, "public_key": public_key}
-        with open(KEYS_FILE_PATH, "w") as f:
-            json.dump(keys, f)
-        os.chmod(KEYS_FILE_PATH, 0o600)
-        return True
+        _migrate_legacy_keys()
+        return _settings().get_secret("wireguard", "public_key")
+    except Exception as e:
+        logger.error(f"Error retrieving public key: {e}")
+        return None
+
+
+def save_wireguard_keys(private_key, public_key):
+    """Save the WireGuard keys encrypted (settings secrets, keyring-backed)."""
+    try:
+        return _save_secrets(private_key, public_key)
     except Exception as e:
         logger.error(f"Error saving keys: {e}")
         return False
 
 
 def delete_wireguard_keys():
-    """Delete the WireGuard keys file."""
+    """Delete the WireGuard keys (and any legacy plaintext keys.json)."""
     try:
+        s = _settings()
+        s.delete("wireguard", "private_key")
+        s.delete("wireguard", "public_key")
         if os.path.exists(KEYS_FILE_PATH):
             os.remove(KEYS_FILE_PATH)
         return True
@@ -290,6 +323,7 @@ def parse_and_create_vpn_config(vpn_config_json_string, config_name="resistine")
             validate_server_config(
                 server_public_key, endpoint, client_address, allowed_ips, dns_servers
             )
+            extra_peer_lines = optional_peer_lines(peer_config)
         except ValueError as e:
             logger.error(f"Rejected invalid VPN config from server: {e}")
             return None
@@ -321,6 +355,8 @@ PublicKey = {server_public_key}
 AllowedIPs = {allowed_ips_str}
 Endpoint = {endpoint}
 """
+        if extra_peer_lines:
+            config_content += "\n".join(extra_peer_lines) + "\n"
 
         # Determine config path using the shared utility
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
