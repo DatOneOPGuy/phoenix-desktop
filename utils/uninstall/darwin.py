@@ -738,6 +738,11 @@ def _remove_keychain_items():
     entries = [
         ("phoenix-master-key", "master-key"),
         ("resistine-master-key", "master-key"),  # pre-rebrand
+        # utils/encryption.py (and its pre-rebrand service name)
+        ("phoenix", "encryption_key"),
+        ("phoenix", "encrypted_data"),
+        ("resistine", "encryption_key"),
+        ("resistine", "encrypted_data"),
     ]
 
     failed = []
