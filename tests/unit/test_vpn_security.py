@@ -395,11 +395,43 @@ class TestLinuxShellSafety:
         conf.write_text("[Interface]\n")
         ok = MagicMock(returncode=0)
         with patch.object(l, "run_privileged_command", return_value=ok) as rpc, \
+                patch.object(l, "_is_nixos", return_value=False), \
                 patch.object(l, "make_dns_compatible_config", side_effect=lambda p: p):
             assert l.start_vpn(str(conf)) is True
         script = rpc.call_args[0][0][2]
         assert "wg-quick up resistine" in script
         assert "'\"'\"'" in script  # the apostrophe is shell-escaped
+
+    def test_nixos_uses_config_in_place(self, tmp_path):
+        """/etc is read-only on NixOS: wg-quick runs on the user's config file,
+        nothing is copied to /etc/wireguard (up and down)."""
+        from plugins.vpn.wireguard import vpn_functions_linux as l
+        weird_dir = tmp_path / "o'brien"
+        weird_dir.mkdir()
+        conf = weird_dir / "resistine.conf"
+        conf.write_text("[Interface]\n")
+        ok = MagicMock(returncode=0)
+        with patch.object(l, "run_privileged_command", return_value=ok) as rpc, \
+                patch.object(l, "_is_nixos", return_value=True):
+            assert l.start_vpn(str(conf)) is True
+            up = rpc.call_args[0][0][2]
+            assert l.stop_vpn(str(conf)) is True
+            down = rpc.call_args[0][0][2]
+        for script, verb in ((up, "up"), (down, "down")):
+            assert "/etc/wireguard" not in script
+            assert script.startswith(f"wg-quick {verb} ")
+            # the full path is passed, quoted (apostrophe escaped)
+            assert "'\"'\"'" in script and script.endswith("resistine.conf'")
+
+    def test_is_nixos_reads_os_release(self, tmp_path):
+        from plugins.vpn.wireguard import vpn_functions_linux as l
+        import builtins
+        real_open = builtins.open
+        for content, expect in (("NAME=NixOS\nID=nixos\n", True), ('ID="ubuntu"\nID_LIKE=debian\n', False)):
+            f = tmp_path / "os-release"
+            f.write_text(content)
+            with patch("builtins.open", side_effect=lambda p, *a, **k: real_open(f if p == "/etc/os-release" else p, *a, **k)):
+                assert l._is_nixos() is expect
 
     def test_dns_compat_drops_unsafe_tokens(self, tmp_path):
         from plugins.vpn.wireguard import vpn_functions_linux as l
