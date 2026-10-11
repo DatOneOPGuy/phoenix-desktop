@@ -12,6 +12,8 @@ import socket
 import subprocess
 import tempfile
 import re
+import shutil
+import ssl
 import urllib.error
 import urllib.request
 
@@ -301,6 +303,8 @@ def get_agent_connection():
         os.path.join(agent_dir, "logs", "ossec.log"),
     )
 
+_DOWNLOAD_TIMEOUT = 60  # seconds per socket operation
+
 def download_package(progress_callback=None):
     url = get_package_url()
     if not url:
@@ -316,7 +320,13 @@ def download_package(progress_callback=None):
 
     logger.info(f"Downloading Wazuh package from {url}")
     try:
-        urllib.request.urlretrieve(url, pkg_path)
+        # urlopen verifies TLS certificates by default; pass an explicit
+        # default context anyway, plus a timeout so a stalled server can't
+        # hang the install thread forever (urlretrieve has no timeout).
+        ctx = ssl.create_default_context()
+        with urllib.request.urlopen(url, timeout=_DOWNLOAD_TIMEOUT, context=ctx) as resp, \
+                open(pkg_path, "wb") as out:
+            shutil.copyfileobj(resp, out)
         logger.info(f"Downloaded to {pkg_path}")
         return pkg_path
     except urllib.error.HTTPError as e:

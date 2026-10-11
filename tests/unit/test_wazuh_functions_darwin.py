@@ -288,7 +288,8 @@ class TestWriteEnvFile:
         assert "user.example.com" in content
 
     def test_returns_false_on_write_error(self):
-        with patch("builtins.open", side_effect=PermissionError("denied")):
+        with patch("plugins.wazuh.agent.wazuh_functions_darwin.os.open",
+                   side_effect=PermissionError("denied")):
             from plugins.wazuh.agent.wazuh_functions_darwin import write_env_file
             result = write_env_file("host", "group")
         assert result is False
