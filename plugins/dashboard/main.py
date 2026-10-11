@@ -35,6 +35,7 @@ from PyQt6.QtWidgets import (
 from gui import theme
 from gui.qt_widgets import CardGrid, StatusBadge, scroll_page
 from plugins.base_plugin import BasePlugin
+from utils import chat_config
 from utils.functions import get_resource_path
 from utils.logger import logger
 
@@ -98,7 +99,7 @@ def _ai_info(chat_plugin) -> dict:
         from plugins.chat import main as chat
     except Exception as e:  # noqa: BLE001
         return {"badge": ("error", "Unavailable"), "rows": {"Error": str(e)}}
-    base = settings.get("chat", "openai_base_url") or chat._DEFAULT_BASE_URL
+    base = chat_config.base_url()
     model = getattr(chat_plugin, "model", None) or "—"
     rows = {"Server": urlsplit(base).netloc or base, "Model": model}
     try:

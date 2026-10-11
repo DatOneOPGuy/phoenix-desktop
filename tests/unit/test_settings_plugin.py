@@ -77,9 +77,10 @@ class TestScreenConstruction:
         assert settings_plugin.appearance_combo.currentText() == "Dark"
 
     def test_defaults_to_openai_transport(self, built_plugin):
-        from plugins.settings.main import _DEFAULT_BASE
+        from utils.chat_config import DEFAULT_BASE_URL
         assert built_plugin.transport_combo.currentData() == "openai"
-        assert built_plugin.api_base_entry.text() == _DEFAULT_BASE
+        assert built_plugin.api_base_entry.text() == DEFAULT_BASE_URL
+        assert DEFAULT_BASE_URL == "https://dashboard.phoenix.exposed:8002/v1"
         assert not built_plugin.api_key_entry.isHidden()
         assert built_plugin.matrix_bot_entry.isHidden()
 

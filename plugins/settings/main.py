@@ -32,12 +32,11 @@ from PyQt6.QtWidgets import (
 from gui import theme
 from gui.qt_widgets import scroll_page
 from plugins.base_plugin import BasePlugin
-from utils import settings
+from utils import chat_config, settings
 from utils.i18n import get_text
 from utils.logger import logger
 
 _DIR = os.path.dirname(os.path.realpath(__file__))
-_DEFAULT_BASE = "https://dashboard.resisti.net:8002/v1"
 _DEFAULT_MATRIX_BOT = "@secagent:phoenix.exposed"
 
 
@@ -201,8 +200,7 @@ class Plugin(BasePlugin):
         self.api_base_entry = QLineEdit()
         self.api_base_entry.setPlaceholderText(
             _t("settings.apibase.placeholder", "API base URL"))
-        self.api_base_entry.setText(
-            settings.get("chat", "openai_base_url") or _DEFAULT_BASE)
+        self.api_base_entry.setText(chat_config.base_url())
         lay.addWidget(self.api_base_entry)
 
         self.disable_animation_checkbox = QCheckBox(

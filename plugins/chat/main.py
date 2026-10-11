@@ -59,7 +59,7 @@ from plugins.chat.history import ChatHistoryManager
 from plugins.chat.qt_markdown import markdown_to_html, stylesheet
 from plugins.chat.streaming import StreamController
 from plugins.chat.suggestions import pick_suggestions
-from utils import settings
+from utils import chat_config, settings
 from utils.logger import logger
 
 # Appended to history when the user navigates away mid-response: the partial
@@ -72,7 +72,7 @@ _NAV_AWAY_MSG = (
 _SYSTEM_PROMPT = "You are SOC Copilot specialized in cybersecurity."
 _ICON_DIR = os.path.dirname(os.path.realpath(__file__))
 _SYS_MSG = {"role": "system", "content": _SYSTEM_PROMPT}
-_DEFAULT_BASE_URL = "https://dashboard.resisti.net:8002/v1"
+_DEFAULT_BASE_URL = chat_config.DEFAULT_BASE_URL
 
 # Thinking spinner (braille) shown while waiting for the first token, ported
 # in spirit from the CustomTkinter build's AssistantBubble. Suppressed when
@@ -636,8 +636,7 @@ class Plugin(BasePlugin):
         except Exception:
             pass
         api_key = settings.get_secret("chat", "openai_api_key")
-        self.base_url = (
-            settings.get("chat", "openai_base_url") or _DEFAULT_BASE_URL)
+        self.base_url = chat_config.base_url()
         self.session_id = None
         if self.base_url:
             self.model, self.conversation_history = "ministral-3:14b", []
