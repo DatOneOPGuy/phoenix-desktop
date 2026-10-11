@@ -45,9 +45,15 @@ WAZUH_ENV_FILE = "/tmp/wazuh_envs"
 
 LINUX_WAZUH_DIR = "/var/ossec"  # where the upstream deb/rpm this app installs lands
 # Where an already-installed agent may live, checked in order: upstream
-# packages, the Phoenix 5.0 agent package, and the NixOS wazuh-agent module
-# (~/.flakes modules/services/wazuh-agent.nix, installDir default).
-LINUX_WAZUH_DIR_CANDIDATES = ("/var/ossec", "/opt/phoenix-agent", "/opt/resistine")
+# packages, the NixOS wazuh-agent module (~/.flakes
+# modules/services/wazuh-agent.nix, installDir default), and the Phoenix
+# agent packages.
+LINUX_WAZUH_DIR_CANDIDATES = (
+    "/var/ossec",
+    "/opt/resistine",
+    "/opt/phoenix-agent",
+    "/opt/agent-phoenix",
+)
 
 # --- Windows Config ---
 WINDOWS_WAZUH_VERSION = "4.11.0"
