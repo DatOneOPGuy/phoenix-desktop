@@ -29,9 +29,6 @@ syntax-check:
 unit-tests:
   stage: test
   needs: [syntax-check]
-  # The suite has known failures (Windows-only tests that run on Linux,
-  # among others). Report them without blocking until it is green.
-  allow_failure: true
   before_script:
     # Runtime libraries PyQt6's wheels load on import.
     - apt-get update -qq
