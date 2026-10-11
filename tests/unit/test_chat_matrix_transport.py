@@ -69,6 +69,29 @@ class TestTurnAssembler:
         assert asm.feed({"body": "plain"}) == "plain"
         assert asm.done
 
+    def test_parts_continue_the_answer(self):
+        asm = TurnAssembler()
+        assert asm.feed(reply("CVE-1 steps\n\n")) == "CVE-1 steps\n\n"
+        assert asm.feed(reply("CVE-2", part=1)) == "CVE-2"
+        assert asm.feed(edit("CVE-2 steps")["m.new_content"] | {TURN_KEY: {"status": "running", "part": 1}}) == " steps"
+        assert asm.feed(reply("CVE-3", "final", part=2)) == "CVE-3"
+        assert asm.text == "CVE-1 steps\n\nCVE-2 stepsCVE-3"
+        assert asm.done and asm.status == "final"
+
+    def test_late_version_of_earlier_part_is_ignored(self):
+        asm = TurnAssembler()
+        asm.feed(reply("part one\n"))
+        asm.feed(reply("part two", part=1))
+        assert asm.feed(reply("part one\nlate", part=0)) == ""
+        assert asm.text == "part one\npart two"
+
+    def test_error_after_parts_ends_turn(self):
+        asm = TurnAssembler()
+        asm.feed(reply("part one\n"))
+        asm.feed(reply("⚠️ The answer could not be delivered in full.", "error", part=1,
+                       error="The answer could not be delivered in full."))
+        assert asm.status == "error" and "delivered" in asm.error
+
 
 class FakeService:
     def __init__(self, typing=False):
@@ -98,6 +121,22 @@ class TestCollect:
             ("message", "$late", edit("Hi there! more")),  # after final: never read
         ])
         assert out == ["Hi", " there", "!"]
+
+    def test_answer_split_into_parts(self):
+        def part_edit(event_id, body, status="running", part=1):
+            new = {"msgtype": "m.text", "body": body,
+                   TURN_KEY: {"status": status, "tools": [], "part": part}}
+            return {"body": "* " + body, "m.new_content": new,
+                    "m.relates_to": {"rel_type": "m.replace", "event_id": event_id}}
+
+        out = collect([
+            ("message", REPLY, reply("First CVE.")),
+            ("message", "$e1", edit("First CVE.\n\n")),  # part 0 sealed
+            ("message", "$p1", reply("Second", part=1)),
+            ("message", "$e2", part_edit("$p1", "Second CVE.")),
+            ("message", "$e3", part_edit("$p1", "Second CVE. Done.", "final")),
+        ])
+        assert "".join(out) == "First CVE.\n\nSecond CVE. Done."
 
     def test_error_reply_raises_user_message(self):
         with pytest.raises(MatrixTransportError, match="not enrolled"):

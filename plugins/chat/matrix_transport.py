@@ -9,7 +9,10 @@ message contract (docs/MATRIX_BRIDGE.md there):
                session (one per Desktop chat)
   bot → user   one reply (m.in_reply_to the prompt) grown by m.replace
                edits; every version carries ``net.resisti.turn: {status}``,
-               and status != "running" ends the turn
+               and status != "running" ends the turn. An answer too large
+               for one Matrix event continues in further replies to the
+               prompt whose turn block carries ``part`` (1, 2, ...); the
+               full text is the parts' bodies concatenated in order.
 
 Identity is the Phoenix account the user signed in with (plugins/login/oidc:
 MAS token + this install's device id); no separate Matrix login.
@@ -66,8 +69,9 @@ def classify(content: dict, prompt_id: Optional[str], reply_id: Optional[str]) -
 class TurnAssembler:
     """Turns the bot's growing message (reply + edits) into text deltas.
 
-    Each version of the reply carries the full text so far; the bridge only
-    ever extends it, so the delta is the new suffix. A version that is not
+    Each version of a part carries that part's full text so far; the bridge
+    only ever extends it, so the delta is the new suffix. A higher ``part``
+    starts a new segment that continues the answer. A version that is not
     an extension (should not happen) is logged and its text dropped rather
     than garbling the bubble.
     """
@@ -76,6 +80,8 @@ class TurnAssembler:
         self.text = ""
         self.status = "running"
         self.error: Optional[str] = None
+        self.part = 0
+        self._part_text = ""
 
     def feed(self, content: dict) -> str:
         """Feed one version (reply content or m.new_content); return the delta."""
@@ -85,9 +91,15 @@ class TurnAssembler:
             self.status = "error"
             self.error = (turn or {}).get("error") or content.get("body") or "The assistant failed."
             return ""
+        part = turn.get("part", 0) if isinstance(turn, dict) else 0
+        if not isinstance(part, int) or part < self.part:
+            return ""  # a late version of an earlier part
+        if part > self.part:
+            self.part, self._part_text = part, ""
         body = content.get("body") or ""
-        if body.startswith(self.text):
-            delta, self.text = body[len(self.text):], body
+        if body.startswith(self._part_text):
+            delta, self._part_text = body[len(self._part_text):], body
+            self.text += delta
         else:
             logger.warning("[CHAT-MATRIX] reply version is not an extension of the previous one; dropped")
             delta = ""
