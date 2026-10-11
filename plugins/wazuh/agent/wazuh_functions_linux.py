@@ -474,6 +474,14 @@ def build_remove_script(wipe_keys: bool = False) -> str:
             f"chown {os.getuid()}:{os.getgid()} '{_KEY_BACKUP}' 2>/dev/null || true"
         )
 
+    if not is_app_managed_agent():
+        # The only agent (if any) was installed some other way (Phoenix
+        # package, NixOS module). Its service, unit and wazuh user belong to
+        # that install, so only the app's key backup is touched.
+        return f"""
+        {key_phase if wipe_keys else ""}
+    """
+
     return f"""
         {stop_cmd}
         {service_teardown}
