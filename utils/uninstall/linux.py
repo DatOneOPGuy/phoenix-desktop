@@ -199,12 +199,19 @@ def _remove_keyring_master_key():
     from utils.settings import (LEGACY_MASTER_KEY_SERVICE, MASTER_KEY_SERVICE,
                                 MASTER_KEY_USERNAME)
 
-    for service in (MASTER_KEY_SERVICE, LEGACY_MASTER_KEY_SERVICE):
+    from utils.encryption import KEYRING_SERVICE, LEGACY_KEYRING_SERVICE
+
+    entries = [(service, MASTER_KEY_USERNAME)
+               for service in (MASTER_KEY_SERVICE, LEGACY_MASTER_KEY_SERVICE)]
+    entries += [(service, name)
+                for service in (KEYRING_SERVICE, LEGACY_KEYRING_SERVICE)
+                for name in ("encryption_key", "encrypted_data")]
+    for service, username in entries:
         try:
-            keyring.delete_password(service, MASTER_KEY_USERNAME)
-            logger.info(f"[UNINSTALL-LINUX] Removed keyring master key {service}")
+            keyring.delete_password(service, username)
+            logger.info(f"[UNINSTALL-LINUX] Removed keyring entry {service}/{username}")
         except keyring.errors.PasswordDeleteError:
-            logger.info(f"[UNINSTALL-LINUX] Keyring master key {service} not found")
+            logger.info(f"[UNINSTALL-LINUX] Keyring entry {service}/{username} not found")
 
 
 def _remove_app_config():

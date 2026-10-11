@@ -132,7 +132,7 @@ class TestGetOrCreateKey:
             get_or_create_key()
         kr.set_password.assert_called_once()
         call_args = kr.set_password.call_args[0]
-        assert call_args[0] == "resistine"
+        assert call_args[0] == "phoenix"
         assert call_args[1] == "encryption_key"
 
     def test_returns_existing_key(self):
@@ -208,7 +208,7 @@ class TestEncryptDecrypt:
     def _seed_key(self, kr, store):
         """Directly seed a valid Fernet key into the mock keyring store."""
         key = Fernet.generate_key()
-        store[("resistine", "encryption_key")] = key.decode()
+        store[("phoenix", "encryption_key")] = key.decode()
         return key
 
     def test_encrypt_then_decrypt_round_trip(self):
@@ -228,7 +228,7 @@ class TestEncryptDecrypt:
         with patch("utils.encryption.keyring", kr):
             encrypt_data({"secret": "plaintext_value"})
         # The stored JSON should NOT contain the plaintext
-        stored_json = store.get(("resistine", "encrypted_data"), "")
+        stored_json = store.get(("phoenix", "encrypted_data"), "")
         assert "plaintext_value" not in stored_json
 
     def test_decrypt_without_data_raises(self):
@@ -273,3 +273,68 @@ class TestKeyringReturnsBytes:
         existing = Fernet.generate_key()
         with patch("utils.encryption.keyring", self._kr(existing)):
             assert retrieve_key() == existing
+
+
+@pytest.mark.unit
+class TestKeyringServiceRename:
+    """Entries move from the pre-rebrand "resistine" service to "phoenix"."""
+
+    def _kr(self, store, fail_set=False):
+        kr = MagicMock()
+        kr.get_keyring.return_value = _make_backend("SecureKeyring", "keyring.backends.SecureVault")
+        kr.get_password.side_effect = lambda s, u: store.get((s, u))
+
+        def _set(s, u, p):
+            if fail_set:
+                raise RuntimeError("keyring locked")
+            store[(s, u)] = p
+
+        kr.set_password.side_effect = _set
+        kr.delete_password.side_effect = lambda s, u: store.pop((s, u))
+        return kr
+
+    def test_legacy_key_is_moved(self):
+        from utils.encryption import get_or_create_key
+        key = Fernet.generate_key().decode()
+        store = {("resistine", "encryption_key"): key}
+        with patch("utils.encryption.keyring", self._kr(store)):
+            assert get_or_create_key() == key.encode()
+        assert store == {("phoenix", "encryption_key"): key}
+
+    def test_legacy_data_round_trips_after_move(self):
+        from utils.encryption import decrypt_data, encrypt_data
+        store = {}
+        kr = self._kr(store)
+        store[("phoenix", "encryption_key")] = Fernet.generate_key().decode()
+        with patch("utils.encryption.keyring", kr):
+            encrypt_data({"user": "alice"})
+        # simulate a pre-rebrand install: both entries under "resistine"
+        for name in ("encryption_key", "encrypted_data"):
+            store[("resistine", name)] = store.pop(("phoenix", name))
+        with patch("utils.encryption.keyring", kr):
+            assert decrypt_data() == {"user": "alice"}
+        assert all(service == "phoenix" for service, _ in store)
+
+    def test_failed_copy_keeps_legacy_entry(self):
+        from utils.encryption import retrieve_key
+        key = Fernet.generate_key().decode()
+        store = {("resistine", "encryption_key"): key}
+        with patch("utils.encryption.keyring", self._kr(store, fail_set=True)):
+            assert retrieve_key() == key.encode()
+        assert store == {("resistine", "encryption_key"): key}
+
+    def test_phoenix_entry_wins(self):
+        from utils.encryption import retrieve_key
+        new, old = Fernet.generate_key().decode(), Fernet.generate_key().decode()
+        store = {("phoenix", "encryption_key"): new, ("resistine", "encryption_key"): old}
+        with patch("utils.encryption.keyring", self._kr(store)):
+            assert retrieve_key() == new.encode()
+        assert store[("resistine", "encryption_key")] == old  # untouched
+
+    def test_new_key_never_written_to_legacy(self):
+        from utils.encryption import get_or_create_key
+        store = {}
+        with patch("utils.encryption.keyring", self._kr(store)):
+            get_or_create_key()
+        assert list(store) == [("phoenix", "encryption_key")]
+
