@@ -5,6 +5,7 @@ _offer_quarantine_batch, destroy, status state mapping, and auto-update schedule
 """
 
 import os
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -502,16 +503,21 @@ class TestAutoUpdateScheduler:
         # Should be within 24h + jitter (max ~26 hours)
         assert delay < 26 * 3600
 
-    def test_auto_update_loop_calls_freshclam(self, plugin):
-        """Verify the loop calls run_freshclam when the timer fires."""
-        call_count = 0
+    @staticmethod
+    def _run_loop(plugin, last_sig_update_ts):
+        """Run _auto_update_loop until its second wait; return the clamav mock.
+
+        The first wait "expires" (one scheduled update), the second stops the
+        loop. Settings are mocked so the loop's stale-signature catch-up
+        depends only on *last_sig_update_ts*, and a successful update can't
+        write the timestamp into the real config.
+        """
+        waits = 0
 
         def fake_wait(timeout):
-            nonlocal call_count
-            call_count += 1
-            if call_count >= 2:
-                return True  # Signal stop on second wait
-            return False  # First wait "expires" — triggers freshclam
+            nonlocal waits
+            waits += 1
+            return waits >= 2
 
         plugin._auto_update_stop = MagicMock()
         plugin._auto_update_stop.is_set.return_value = False
@@ -520,10 +526,25 @@ class TestAutoUpdateScheduler:
         plugin.app = MagicMock()
 
         with patch("plugins.antivirus.main.clamav") as mock_clamav, \
+             patch("plugins.antivirus.main.settings") as mock_settings, \
              patch.object(plugin, "_seconds_until_next_run", return_value=0):
+            mock_settings.get.return_value = last_sig_update_ts
             mock_clamav.run_freshclam.return_value = (True, "Updated")
             plugin._auto_update_loop()
-            mock_clamav.run_freshclam.assert_called_once()
+        return mock_clamav, mock_settings
+
+    def test_auto_update_loop_calls_freshclam(self, plugin):
+        """Fresh signatures: only the scheduled update runs."""
+        mock_clamav, mock_settings = self._run_loop(plugin, time.time())
+        mock_clamav.run_freshclam.assert_called_once()
+        mock_settings.set.assert_called_once()
+        assert mock_settings.set.call_args.args[:2] == (
+            "antivirus", "last_sig_update_ts")
+
+    def test_auto_update_loop_catches_up_when_stale(self, plugin):
+        """Never-updated signatures: a catch-up runs before the scheduled one."""
+        mock_clamav, _ = self._run_loop(plugin, 0)
+        assert mock_clamav.run_freshclam.call_count == 2
 
 
 # ---------------------------------------------------------------------------
