@@ -21,11 +21,24 @@ from __future__ import annotations
 import os
 import threading
 
-from PyQt6.QtCore import QSize, Qt, QTimer, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QIcon, QPixmap
+from PyQt6.QtCore import (
+    QEasingCurve,
+    QPropertyAnimation,
+    QRectF,
+    QSize,
+    Qt,
+    QTimer,
+    pyqtSignal,
+    pyqtSlot,
+)
+from PyQt6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QFrame,
+    QGraphicsBlurEffect,
+    QGraphicsDropShadowEffect,
+    QGraphicsPixmapItem,
+    QGraphicsScene,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -39,6 +52,70 @@ from gui import theme
 from gui.qt_toast import Toast
 from gui.qt_widgets import resource
 from utils.logger import logger
+
+
+# Nav icon geometry: the glyph is NAV_ICON px, drawn on a canvas padded by
+# NAV_GLOW_PAD on each side so a status glow has room around it.
+NAV_ICON = 24
+NAV_GLOW_PAD = 8
+
+# Plugin status (BasePlugin.get_status) -> glow colour; others = no glow.
+STATUS_GLOW = {
+    "OK": "#2CC985",
+    "Warning": "#FF4040",
+    "Error": "#FF4040",
+    "Critical": "#FF4040",
+}
+
+
+def _blur(img: QImage, radius: float) -> QImage:
+    scene = QGraphicsScene()
+    item = QGraphicsPixmapItem(QPixmap.fromImage(img))
+    effect = QGraphicsBlurEffect()
+    effect.setBlurRadius(radius)
+    effect.setBlurHints(QGraphicsBlurEffect.BlurHint.QualityHint)
+    item.setGraphicsEffect(effect)
+    scene.addItem(item)
+    out = QImage(img.size(), QImage.Format.Format_ARGB32_Premultiplied)
+    out.fill(0)
+    p = QPainter(out)
+    rect = QRectF(0, 0, img.width(), img.height())
+    scene.render(p, rect, rect)
+    p.end()
+    return out
+
+
+def glow_icon(icon: QIcon, color: str | None) -> QIcon:
+    """``icon`` on a padded canvas, with a soft ``color`` halo behind the
+    glyph (none when ``color`` is None) for every mode/state."""
+    from plugins.base_plugin import BasePlugin
+
+    ratio = 2.0
+    full = NAV_ICON + 2 * NAV_GLOW_PAD
+    px, pad = int(full * ratio), int(NAV_GLOW_PAD * ratio)
+    out = QIcon()
+    for mode in (QIcon.Mode.Normal, QIcon.Mode.Active):
+        for state in (QIcon.State.Off, QIcon.State.On):
+            src = icon.pixmap(QSize(NAV_ICON, NAV_ICON), ratio, mode, state)
+            src.setDevicePixelRatio(1.0)  # work in physical pixels below
+            canvas = QImage(px, px, QImage.Format.Format_ARGB32_Premultiplied)
+            canvas.fill(0)
+            p = QPainter(canvas)
+            if color and not src.isNull():
+                halo = QImage(px, px, QImage.Format.Format_ARGB32_Premultiplied)
+                halo.fill(0)
+                hp = QPainter(halo)
+                hp.drawPixmap(pad, pad, BasePlugin._tint(src, color))
+                hp.end()
+                halo = _blur(halo, 9 * ratio)
+                p.drawImage(0, 0, halo)
+                p.drawImage(0, 0, halo)  # twice: a stronger, visible glow
+            p.drawPixmap(pad, pad, src)
+            p.end()
+            pm = QPixmap.fromImage(canvas)
+            pm.setDevicePixelRatio(ratio)
+            out.addPixmap(pm, mode, state)
+    return out
 
 
 class AppWindow(QMainWindow):
@@ -63,6 +140,11 @@ class AppWindow(QMainWindow):
         self.frames: dict = {}
         self._screens: dict[str, QWidget] = {}
         self._nav_buttons: dict[str, QPushButton] = {}
+        self._nav_status: dict[str, str | None] = {}
+        self._nav_status_busy = False
+        self._nav_status_timer = QTimer(self)
+        self._nav_status_timer.setInterval(5000)
+        self._nav_status_timer.timeout.connect(self._refresh_nav_status)
         self.current_frame_name = ""
         self._current_main_screen = None
 
@@ -191,8 +273,9 @@ class AppWindow(QMainWindow):
             btn.setCheckable(True)
             btn.setFixedSize(52, 48)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setIconSize(QSize(24, 24))
-            btn.setIcon(p.get_nav_icon())
+            size = NAV_ICON + 2 * NAV_GLOW_PAD
+            btn.setIconSize(QSize(size, size))
+            btn.setIcon(self._nav_icon(p))
             btn.setToolTip(p.get_name())
             btn.setAccessibleName(p.get_name())
             btn.clicked.connect(
@@ -211,12 +294,61 @@ class AppWindow(QMainWindow):
         for btn in bottom:
             sb.addWidget(btn, 0, Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(self.sidebar)
+        self._nav_status = {}
+        self._refresh_nav_status()
+        self._nav_status_timer.start()
+
+    # ---- Nav status glow --------------------------------------------------
+    def _nav_icon(self, plugin) -> QIcon:
+        """The plugin's nav icon with a glow in its status colour."""
+        status = self._nav_status.get(plugin.get_name())
+        return glow_icon(plugin.get_nav_icon(), STATUS_GLOW.get(status))
+
+    def _refresh_nav_status(self) -> None:
+        """Read plugin statuses off the GUI thread (some checks shell out),
+        then repaint only the icons whose status changed."""
+        if self._nav_status_busy:
+            return
+        plugins = [self._plugin_by_name(n) for n in self._nav_buttons]
+        plugins = [p for p in plugins if p is not None]
+        if not plugins:
+            return
+        self._nav_status_busy = True
+
+        def work():
+            statuses = {}
+            for p in plugins:
+                try:
+                    statuses[p.get_name()] = p.get_status()
+                except Exception:  # noqa: BLE001
+                    statuses[p.get_name()] = None
+            self.after(0, lambda: self._apply_nav_status(statuses))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _apply_nav_status(self, statuses: dict) -> None:
+        self._nav_status_busy = False
+        for name, status in statuses.items():
+            if self._nav_status.get(name, "?") == status:
+                continue
+            self._nav_status[name] = status
+            btn = self._nav_buttons.get(name)
+            plugin = self._plugin_by_name(name)
+            if btn is None or plugin is None:
+                continue
+            try:
+                btn.setIcon(self._nav_icon(plugin))
+            except RuntimeError:  # sidebar rebuilt meanwhile
+                pass
 
     def _logo_widget(self) -> QWidget:
-        # The square Phoenix app mark (same art as the login screen).
+        # The square Phoenix app mark (same art as the login screen). It
+        # doubles as the protection indicator: see set_protection_status().
         label = QLabel()
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setToolTip("Phoenix")
+        self._logo = label
+        self._logo_anim = None
         size = 44
         path = resource("resources", "icons", "PhoenixMark.png")
         pm = QPixmap(path) if os.path.isfile(path) else QPixmap()
@@ -227,11 +359,57 @@ class AppWindow(QMainWindow):
                            Qt.TransformationMode.SmoothTransformation)
             pm.setDevicePixelRatio(ratio)
             label.setPixmap(pm)
-            return label
-        label.setText("P")
-        label.setStyleSheet(
-            f"font-size: 24px; font-weight: 800; color: {theme.color('accent')};")
+        else:
+            label.setText("P")
+            label.setStyleSheet(
+                f"font-size: 24px; font-weight: 800; color: {theme.color('accent')};")
+        self._apply_logo_glow()
         return label
+
+    # Glow colour per protection state; None (unknown) = no glow.
+    _GLOW = {"ok": "#2CC985", "error": "#FF4040"}
+
+    def set_protection_status(self, state: str | None) -> None:
+        """Make the sidebar logo glow green ("ok") or red ("error")."""
+        if state == getattr(self, "_protection", None):
+            return
+        self._protection = state
+        self._apply_logo_glow()
+
+    def _apply_logo_glow(self) -> None:
+        label = getattr(self, "_logo", None)
+        if label is None:
+            return
+        if self._logo_anim is not None:
+            self._logo_anim.stop()
+            self._logo_anim = None
+        state = getattr(self, "_protection", None)
+        colour = self._GLOW.get(state)
+        try:
+            if colour is None:
+                label.setGraphicsEffect(None)
+                label.setToolTip("Phoenix")
+                return
+            glow = QGraphicsDropShadowEffect(label)
+            glow.setOffset(0, 0)
+            glow.setColor(QColor(colour))
+            glow.setBlurRadius(22)
+            label.setGraphicsEffect(glow)
+            label.setToolTip("Phoenix — protected" if state == "ok"
+                             else "Phoenix — not protected")
+            if state == "error":
+                # Unprotected: a slow breathing pulse to draw the eye.
+                anim = QPropertyAnimation(glow, b"blurRadius", label)
+                anim.setDuration(2400)
+                anim.setStartValue(10.0)
+                anim.setKeyValueAt(0.5, 30.0)
+                anim.setEndValue(10.0)
+                anim.setEasingCurve(QEasingCurve.Type.InOutSine)
+                anim.setLoopCount(-1)
+                anim.start()
+                self._logo_anim = anim
+        except RuntimeError:  # logo deleted by a shell rebuild
+            self._logo = None
 
     # ===================================================================
     #  Navigation
@@ -289,7 +467,7 @@ class AppWindow(QMainWindow):
                 names.add(p.get_name())
                 btn = self._nav_buttons.get(p.get_name())
                 if btn is not None:
-                    btn.setIcon(p.get_nav_icon())
+                    btn.setIcon(self._nav_icon(p))
         for n in names:
             self._rebuild_screen(n)
 
@@ -332,7 +510,7 @@ class AppWindow(QMainWindow):
         for name, btn in self._nav_buttons.items():
             p = self._plugin_by_name(name)
             if p is not None:
-                btn.setIcon(p.get_nav_icon())
+                btn.setIcon(self._nav_icon(p))
             try:
                 btn.setAttribute(
                     Qt.WidgetAttribute.WA_UnderMouse, False)
@@ -357,7 +535,7 @@ class AppWindow(QMainWindow):
         # use the PALETTE — which otherwise follows the macOS system
         # appearance. With system-dark + app-light that leaked as black
         # bands/strips in light mode wherever QSS doesn't reach.
-        from PyQt6.QtGui import QColor, QPalette
+        from PyQt6.QtGui import QPalette
         pal = QPalette()
         window = QColor(theme.color("window_bg"))
         base = QColor(theme.color("card_bg"))
