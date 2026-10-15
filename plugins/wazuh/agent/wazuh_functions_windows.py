@@ -25,6 +25,7 @@ from utils.windows_admin import is_admin as _is_admin
 from plugins.wazuh.agent import phoenix_packages
 from plugins.wazuh.config import (
     WAZUH_MANAGER,
+    WAZUH_MANAGER_ENDPOINT,
     WAZUH_MANAGER_PORT,
     WAZUH_PROTOCOL,
     WAZUH_REGISTRATION_PORT,
@@ -481,18 +482,18 @@ def download_package(progress_callback=None):
 
 
 def _ensure_ossec_address():
-    """Patch ossec.conf if the manager address is wrong (e.g. left as 0.0.0.0 by MSI)."""
+    """Patch ossec.conf if the manager endpoint is wrong (e.g. left as 0.0.0.0 by MSI)."""
     try:
         with open(_OSSEC_CONF, "r", encoding="utf-8", errors="replace") as f:
             content = f.read()
-        if f"<address>{WAZUH_MANAGER}</address>" in content:
+        if f"<endpoint>{WAZUH_MANAGER_ENDPOINT}</endpoint>" in content:
             return
     except Exception:
         return
-    logger.warning(f"ossec.conf has wrong manager address — patching to {WAZUH_MANAGER}")
+    logger.warning(f"ossec.conf has wrong manager endpoint — patching to {WAZUH_MANAGER_ENDPOINT}")
     patch_cmd = (
         f"(Get-Content {_ps_quote(_OSSEC_CONF)}) "
-        f"-replace '<address>.*</address>', '<address>{_ps_escape_path(WAZUH_MANAGER)}</address>' | "
+        f"-replace '<endpoint>.*</endpoint>', '<endpoint>{_ps_escape_path(WAZUH_MANAGER_ENDPOINT)}</endpoint>' | "
         f"Set-Content {_ps_quote(_OSSEC_CONF)}"
     )
     _run_privileged(patch_cmd)
@@ -701,11 +702,11 @@ def _build_install_script(sysmon, msi_path, agent_name, agent_group, backup_dir)
         f"Stop-Service -Name {_ps_quote(_SERVICE_NAME)} -Force -ErrorAction SilentlyContinue"
     ))
 
-    # Patch manager address + agent name in ossec.conf.
+    # Patch manager endpoint + agent name in ossec.conf.
     parts.append(_guard(
         f"if (Test-Path {_ps_quote(_OSSEC_CONF)}) {{ "
         f"(Get-Content {_ps_quote(_OSSEC_CONF)}) "
-        f"-replace '<address>.*</address>', '<address>{_ps_escape_path(WAZUH_MANAGER)}</address>' "
+        f"-replace '<endpoint>.*</endpoint>', '<endpoint>{_ps_escape_path(WAZUH_MANAGER_ENDPOINT)}</endpoint>' "
         f"-replace '<agent_name>.*</agent_name>', '<agent_name>{_ps_escape_path(agent_name)}</agent_name>' | "
         f"Set-Content {_ps_quote(_OSSEC_CONF)} }}"
     ))
