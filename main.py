@@ -108,11 +108,14 @@ def _build_app() -> tuple[QApplication, object]:
     except Exception as e:
         logger.debug(f"Desktop entry setup skipped: {e}")
 
-    try:
-        from utils import updates
-        updates.init(window)
-    except Exception as e:
-        logger.warning(f"Failed to start auto-updater: {e}")
+    # Auto-update is off for now. Without init no backend starts (Sparkle,
+    # WinSparkle or the Linux scheduler), so the app never checks on its own;
+    # Settings' "Check for updates" reports updates as unavailable.
+    # try:
+    #     from utils import updates
+    #     updates.init(window)
+    # except Exception as e:
+    #     logger.warning(f"Failed to start auto-updater: {e}")
 
     # Native system tray (Windows). Replaces the old standalone pystray tray
     # that the packaged build never launched. Closing the window then hides to
