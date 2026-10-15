@@ -76,11 +76,43 @@ Response 200 (the same shape the old `/verify-otp` returned):
 The client validates every field and refuses newlines, script hooks and
 malformed keys/addresses, so a compromised API can't inject `PostUp` lines.
 
+## POST /v1/agent/enroll
+
+Registers this device's Wazuh agent with the manager, server side, and puts it
+in the user's group, `u_<localpart>` (created on first use). The agent never
+needs the manager's enrollment port (1515).
+
+```json
+{"name": "MacBook-1a2b3c4d"}
+```
+
+`name`: 1-64 of `A-Za-z0-9._-`. Answer:
+
+```json
+{"agent_id": "012", "agent_name": "MacBook-1a2b3c4d", "group": "u_alice",
+ "manager": "dashboard.phoenix.exposed:1517",
+ "key": "<base64 of the client.keys line: 012 MacBook-1a2b3c4d any <64 hex>>"}
+```
+
+Idempotent per device: while the device's agent exists on the manager the
+same agent (ID, name, key) comes back and is put back in the group, whatever
+`name` says; if it was deleted there, a new one is registered. The client
+writes the line as `client.keys` from a root step that re-checks its shape
+(`plugins/wazuh/agent/enrollment.py`), and falls back to `agent-auth` when the
+API can't enroll. 409 when the name or the device belongs to another account;
+503 when the Wazuh API is unreachable or not configured.
+
+Server: the provisioning API calls the Wazuh 5.0 API on francispc
+(`https://10.42.10.250:55000`, certificate pinned) as a user whose role allows
+only agent create/read/delete, group create and group assignment
+(Resistine-Server-install `scripts/wazuh_provisioning_user.sh`).
+
 ## DELETE /v1/device
 
-Removes this device's peer (`phoenix-peer del <device_id>`) and marks it
-revoked. 204 on success, 404 if the device has no peer (the client treats
-both as done). The app calls it on logout, before revoking its MAS session.
+Removes this device's peer (`phoenix-peer del <device_id>`) and its Wazuh
+agent, and marks it revoked. 204 on success, 404 if the device has neither
+(the client treats both as done). The app calls it on logout, before revoking
+its MAS session.
 
 ## Errors
 
@@ -127,4 +159,4 @@ MAS `/account` also drops its VPN peer. Must be idempotent.
 
 - Request signing with the device's Matrix ed25519 key (checked through
   Synapse `/keys/query`), once the desktop Matrix client publishes it.
-- `/v1/wazuh/enroll` on the same API and registry.
+- Agents of devices signed out elsewhere (revocation sync) are not deleted yet.

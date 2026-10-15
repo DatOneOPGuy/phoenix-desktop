@@ -133,9 +133,15 @@ def trigger_install(app) -> bool:
         _fail(STATE_INSTALL_FAILED, "pkg_corrupted")
         return False
 
-    # Prepare agent identity (group is auto-created server-side on enroll).
+    # Prepare agent identity. The Phoenix API enrolls server side, in the
+    # user's group; without it the script runs agent-auth.
+    from plugins.wazuh.agent import enrollment
+
     agent_name = get_agent_name()
     agent_group = get_agent_group()
+    enrolled = enrollment.request(agent_name)
+    if enrolled:
+        agent_name = enrolled.agent_name
 
     if not write_env_file(agent_name, agent_group):
         _fail(STATE_INSTALL_FAILED, "script_failed")
@@ -143,9 +149,11 @@ def trigger_install(app) -> bool:
 
     # Always re-enroll so the manager receives the group on every install.
     launched, status_file = _launch_postinstall(
-        pkg_path, agent_name, agent_group, restore_keys=False
+        pkg_path, agent_name, agent_group, restore_keys=False,
+        key_file=enrolled.key_file if enrolled else None,
     )
     if not launched:
+        enrollment.discard(enrolled)
         _fail(STATE_INSTALL_FAILED, "user_canceled")
         return False
 

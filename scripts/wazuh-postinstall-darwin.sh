@@ -17,6 +17,7 @@ MANAGER=""
 STATUS_FILE=""
 LOG_FILE=""
 RESTORE_KEYS="false"
+KEY_FILE=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -47,6 +48,11 @@ while [ $# -gt 0 ]; do
         --restore-keys)
             RESTORE_KEYS="true"
             shift
+            ;;
+        --key-file)
+            # client.keys line from the Phoenix API (server-side enrollment)
+            KEY_FILE="$2"
+            shift 2
             ;;
         *)
             echo "Unknown argument: $1" >&2
@@ -128,9 +134,9 @@ KC_SERVICE="com.resistine.wazuh.agent"
 KC_ACCOUNT="client_key"
 AGENT_AUTH_LOG="${LOG_FILE%.log}-agent-auth.log"
 
-# Always run agent-auth so the manager receives the group in the registration
-# request.  Server-side groups are auto-created on enroll; restoring a stale
-# client.keys would skip that and the agent would land in "default".
+# Never restore a stale client.keys: either the Phoenix API enrolled the agent
+# server side in the user's group (--key-file), or agent-auth registers it
+# now so the manager receives the group in the registration request.
 rm -f "$CLIENT_KEYS"
 
 # agent-auth writes its diagnostic lines to stderr on success and to stdout on
@@ -139,8 +145,26 @@ EFFECTIVE_AGENT_NAME="$AGENT_NAME"
 ENROLLMENT_RESULT="enroll_failed"
 ENROLLMENT_ERROR=""
 MAX_ENROLL_ATTEMPTS=3
+ATTEMPTS="$(seq 1 "$MAX_ENROLL_ATTEMPTS")"
 
-for attempt in $(seq 1 "$MAX_ENROLL_ATTEMPTS"); do
+if [ -n "$KEY_FILE" ]; then
+    # Same shape check as plugins/wazuh/agent/enrollment.py KEY_LINE_PATTERN:
+    # the file sits in the user's temp dir, so only a key line is accepted.
+    KEY_LINE="$(head -c 512 "$KEY_FILE" 2>/dev/null | head -n 1 || true)"
+    rm -f "$KEY_FILE"
+    if printf '%s\n' "$KEY_LINE" \
+        | grep -Eqx '[0-9]{3,8} [A-Za-z0-9._-]{1,64} (any|[0-9A-Fa-f.:/]{2,64}) [0-9a-f]{64}'; then
+        (umask 027; printf '%s\n' "$KEY_LINE" > "$CLIENT_KEYS")
+        chown root:wazuh "$CLIENT_KEYS" 2>/dev/null || true
+        chmod 640 "$CLIENT_KEYS"
+        ENROLLMENT_RESULT="enrolled"
+    else
+        ENROLLMENT_ERROR="key_invalid"
+    fi
+    ATTEMPTS=""  # no agent-auth (BSD `seq 1 0` would count down)
+fi
+
+for attempt in $ATTEMPTS; do
     set +e
     "$AGENT_AUTH_BIN" \
         -m "$MANAGER" \

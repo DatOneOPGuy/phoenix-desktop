@@ -22,7 +22,7 @@ from utils import settings
 from utils.logger import logger
 from utils.windows_admin import is_admin as _is_admin
 
-from plugins.wazuh.agent import phoenix_packages
+from plugins.wazuh.agent import enrollment, phoenix_packages
 from plugins.wazuh.config import (
     WAZUH_MANAGER,
     WAZUH_MANAGER_ENDPOINT,
@@ -481,6 +481,29 @@ def download_package(progress_callback=None):
         filename="phoenix-agent.msi")
 
 
+def _key_write_ps(key_file):
+    """PowerShell installing the key line from ``key_file`` (written by
+    enrollment.request) as client.keys, after re-checking its shape."""
+    return (
+        f"$k = Get-Content -LiteralPath {_ps_quote(key_file)} -TotalCount 1 -ErrorAction Stop; "
+        f"if ($k -cnotmatch {_ps_quote('^' + enrollment.KEY_LINE_PATTERN + '$')}) "
+        f"{{ Write-Output 'KEY_INVALID'; throw 'KEY_INVALID' }}; "
+        f"[IO.File]::WriteAllText({_ps_quote(_CLIENT_KEYS)}, $k + \"`n\", [Text.Encoding]::ASCII)"
+    )
+
+
+def _register_ps(enrolled, agent_name, agent_group):
+    """Write the API-enrolled key, or (fallback) register with agent-auth."""
+    if enrolled:
+        return _key_write_ps(enrolled.key_file)
+    return (
+        f"if (Test-Path {_ps_quote(_AGENT_AUTH)}) {{ "
+        f"& {_ps_quote(_AGENT_AUTH)} -m {_ps_quote(WAZUH_MANAGER)} "
+        f"-p {_ps_quote(WAZUH_REGISTRATION_PORT)} "
+        f"-A {_ps_quote(agent_name)} -G {_ps_quote(agent_group)} }}"
+    )
+
+
 def _ensure_ossec_address():
     """Patch ossec.conf if the manager endpoint is wrong (e.g. left as 0.0.0.0 by MSI)."""
     try:
@@ -585,13 +608,17 @@ def reenroll_agent():
     base = get_agent_name()
     new_name = f"{base}-{str(int(time.time()))[-6:]}"
     group = get_agent_group()
+    # The Phoenix API answers with the manager's current key for this device
+    # (a new agent if the old one was deleted there); else agent-auth.
+    enrolled = enrollment.request(new_name)
+    if enrolled:
+        new_name = enrolled.agent_name
 
     script = (
         f"Stop-Service -Name {_ps_quote(_SERVICE_NAME)} -Force -ErrorAction SilentlyContinue; "
         f"Remove-Item -Path {_ps_quote(_CLIENT_KEYS)},{_ps_quote(_KEY_BACKUP)} -Force "
         f"-ErrorAction SilentlyContinue; "
-        f"if (Test-Path {_ps_quote(_AGENT_AUTH)}) {{ & {_ps_quote(_AGENT_AUTH)} -m {_ps_quote(WAZUH_MANAGER)} "
-        f"-p {_ps_quote(WAZUH_REGISTRATION_PORT)} -A {_ps_quote(new_name)} -G {_ps_quote(group)} }}; "
+        f"{_register_ps(enrolled, new_name, group)}; "
         f"if (-not (Test-Path {_ps_quote(_CLIENT_KEYS)}) -or "
         f"((Get-Item {_ps_quote(_CLIENT_KEYS)}).Length -eq 0)) "
         f"{{ Write-Output 'REENROLL_NO_KEY'; exit 1 }}; "
@@ -605,6 +632,7 @@ def reenroll_agent():
         f"Write-Output 'REENROLL_OK'"
     )
     success, output = _run_privileged(script)
+    enrollment.discard(enrolled)
     if success and "REENROLL_OK" in (output or "") \
             and "REENROLL_NO_KEY" not in (output or ""):
         logger.info(f"Wazuh re-enrolled under fresh name {new_name}")
@@ -650,7 +678,7 @@ def remove_agent(wipe_keys: bool = False):
     return success
 
 
-def _build_install_script(sysmon, msi_path, agent_name, agent_group, backup_dir):
+def _build_install_script(sysmon, msi_path, agent_name, agent_group, backup_dir, enrolled=None):
     """Assemble ONE elevated PowerShell script for every privileged install step.
 
     Batching the Sysmon install, the Wazuh MSI, the ossec.conf patch +
@@ -717,13 +745,8 @@ def _build_install_script(sysmon, msi_path, agent_name, agent_group, backup_dir)
         ("Microsoft-Windows-Windows Defender/Operational", _DEFENDER_LOCALFILE_BLOCK),
     ])))
 
-    # Enroll with the manager (writes client.keys).
-    parts.append(_guard(
-        f"if (Test-Path {_ps_quote(_AGENT_AUTH)}) {{ "
-        f"& {_ps_quote(_AGENT_AUTH)} -m {_ps_quote(WAZUH_MANAGER)} "
-        f"-p {_ps_quote(WAZUH_REGISTRATION_PORT)} "
-        f"-A {_ps_quote(agent_name)} -G {_ps_quote(agent_group)} }}"
-    ))
+    # Enroll (writes client.keys): the key from the Phoenix API, or agent-auth.
+    parts.append(_guard(_register_ps(enrolled, agent_name, agent_group)))
 
     # Back up client.keys for future repair/recovery.
     parts.append(_guard(
@@ -758,16 +781,21 @@ def full_install(progress_callback=None):
         _p("Download failed")
         return False
 
-    # Agent name/group (server-side group auto-created on enroll).
+    # Agent name/group. The Phoenix API enrolls server side, in the user's
+    # group; without it agent-auth registers with this group.
     agent_name = get_agent_name()
     agent_group = get_agent_group()
+    enrolled = enrollment.request(agent_name)
+    if enrolled:
+        agent_name = enrolled.agent_name
     backup_dir = os.path.dirname(_KEY_BACKUP)
 
     # --- Single elevated batch: one UAC prompt for the whole install ---
     _p("Installing — please approve the administrator prompt...")
     script = _build_install_script(
-        sysmon, msi_path, agent_name, agent_group, backup_dir)
+        sysmon, msi_path, agent_name, agent_group, backup_dir, enrolled)
     success, output = _run_privileged(script, timeout=600)
+    enrollment.discard(enrolled)
     logger.info(f"[WAZUH] combined install ok={success} output={output!r}")
 
     if not is_agent_installed():

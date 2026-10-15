@@ -16,7 +16,7 @@ from utils import settings
 from utils.logger import logger
 from gui.dialogs import CTkPasswordDialog
 
-from plugins.wazuh.agent import phoenix_packages
+from plugins.wazuh.agent import enrollment, phoenix_packages
 from plugins.wazuh.config import (
     WAZUH_MANAGER,
     WAZUH_MANAGER_PORT,
@@ -515,6 +515,10 @@ def full_install(progress_callback=None):
         
     agent_name = get_agent_name()
     agent_group = get_agent_group()
+    # Server-side enrollment (user's group); None -> agent-auth below.
+    enrolled = enrollment.request(agent_name)
+    if enrolled:
+        agent_name = enrolled.agent_name
 
     os_type = _get_os_info()
     ossec_conf = f"{LINUX_WAZUH_DIR}/etc/ossec.conf"
@@ -540,13 +544,19 @@ def full_install(progress_callback=None):
     agent_auth = f"{LINUX_WAZUH_DIR}/bin/agent-auth"
     backup_dir = os.path.dirname(_KEY_BACKUP)
 
-    # Always re-enroll so the manager receives the group on every install.
+    # The key from the Phoenix API, or (fallback) a fresh agent-auth
+    # registration so the manager receives the group on every install.
     # The key backup is still written for future repair/recovery flows.
     # -p is the port flag; -P (uppercase) is the password-FILE path — passing
     # the port to -P is a no-op that only works because 1515 is the default.
+    if enrolled:
+        register = enrollment.key_write_sh(enrolled.key_file, _CLIENT_KEYS)
+    else:
+        register = (f"rm -f '{_CLIENT_KEYS}'\n"
+                    f"            '{agent_auth}' -m '{WAZUH_MANAGER}' -p '{WAZUH_REGISTRATION_PORT}' "
+                    f"-A '{agent_name}' -G '{agent_group}'")
     enrollment_script = f"""
-            rm -f '{_CLIENT_KEYS}'
-            '{agent_auth}' -m '{WAZUH_MANAGER}' -p '{WAZUH_REGISTRATION_PORT}' -A '{agent_name}' -G '{agent_group}'
+            {register}
             mkdir -p '{backup_dir}' && cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}'
             chown {os.getuid()}:{os.getgid()} '{_KEY_BACKUP}' 2>/dev/null
         """
@@ -566,7 +576,8 @@ def full_install(progress_callback=None):
         progress_callback("Installing Wazuh agent (admin password required)...")
         
     success, output = run_privileged_command(["sh", "-c", script])
-    
+    enrollment.discard(enrolled)
+
     if success or is_agent_installed():
         settings.set("wazuh", _APP_INSTALLED, True)
         settings.set("wazuh", "enrolled_email", settings.get("auth", "email", ""))
@@ -601,12 +612,21 @@ def reenroll_agent():
     agent_auth = f"{LINUX_WAZUH_DIR}/bin/agent-auth"
     ossec_conf = f"{LINUX_WAZUH_DIR}/etc/ossec.conf"
     backup_dir = os.path.dirname(_KEY_BACKUP)
+    # The Phoenix API answers with the manager's current key for this device
+    # (a new agent if the old one was deleted there); else agent-auth.
+    enrolled = enrollment.request(new_name)
+    if enrolled:
+        new_name = enrolled.agent_name
+        register = enrollment.key_write_sh(enrolled.key_file, _CLIENT_KEYS)
+    else:
+        register = (f"'{agent_auth}' -m '{WAZUH_MANAGER}' -p '{WAZUH_REGISTRATION_PORT}' "
+                    f"-A '{new_name}' -G '{group}'")
 
     script = f"""
         systemctl stop wazuh-agent 2>/dev/null
         pkill -9 -f '{LINUX_WAZUH_DIR}/bin/wazuh-' 2>/dev/null
         rm -f '{_CLIENT_KEYS}' '{_KEY_BACKUP}'
-        '{agent_auth}' -m '{WAZUH_MANAGER}' -p '{WAZUH_REGISTRATION_PORT}' -A '{new_name}' -G '{group}'
+        {register}
         if [ ! -s '{_CLIENT_KEYS}' ]; then echo REENROLL_NO_KEY; exit 1; fi
         chmod 640 '{_CLIENT_KEYS}'
         chown wazuh:wazuh '{_CLIENT_KEYS}' 2>/dev/null || chown root:wazuh '{_CLIENT_KEYS}' 2>/dev/null
@@ -620,6 +640,7 @@ def reenroll_agent():
         echo REENROLL_OK
     """
     success, output = run_privileged_command(["sh", "-c", script])
+    enrollment.discard(enrolled)
     if success and "REENROLL_NO_KEY" not in (output or ""):
         logger.info(f"Wazuh re-enrolled under fresh name {new_name}")
         return (True, f"Re-enrolled as {new_name}")

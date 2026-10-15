@@ -129,7 +129,7 @@ def shquote(s: str) -> str:
     return "'" + s.replace("'", "'\\''") + "'"
 
 
-def _run(harness, extra_env=None):
+def _run(harness, extra_env=None, extra_args=()):
     env = os.environ.copy()
     env.update({
         "INSTALLER_BIN": str(harness["bins"] / "installer"),
@@ -159,6 +159,7 @@ def _run(harness, extra_env=None):
         "--manager", WAZUH_MANAGER,
         "--status-file", str(harness["status_file"]),
         "--log-file", str(harness["log_file"]),
+        *extra_args,
     ]
     return subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=60)
 
@@ -347,3 +348,62 @@ exit 0
         assert status["error"] == "launchctl bootstrap failed"
         # Detail field should preserve the underlying launchctl output.
         assert "Input/output error" in status.get("detail", "")
+
+
+KEY_LINE = "005 MacBook-AABB any " + "ab" * 32
+
+
+@pytest.mark.unit
+@pytest.mark.security
+class TestServerSideKey:
+    """--key-file: the Phoenix API enrolled the agent; no agent-auth."""
+
+    def test_key_file_is_installed(self, harness):
+        _install_agent_auth_script(harness, 'exit 1\n')
+        _install_launchctl_script(harness, 'exit 0\n')
+        key_file = harness["tmp_path"] / "enroll" / "client.keys"
+        key_file.parent.mkdir()
+        key_file.write_text(KEY_LINE + "\n")
+
+        result = _run(harness, extra_args=("--key-file", str(key_file)))
+        assert result.returncode == 0, result.stderr
+        assert _read_status(harness)["enrollment"] == "enrolled"
+        assert harness["client_keys"].read_text() == KEY_LINE + "\n"
+        assert stat.S_IMODE(harness["client_keys"].stat().st_mode) == 0o640
+        assert not harness["agent_auth_calls"].exists()
+        assert not key_file.exists()  # the script deletes it
+        assert harness["key_backup"].exists()
+
+    @pytest.mark.parametrize("content", [
+        "not a key\n", "", "005 MacBook-AABB any abc; touch /tmp/x\n",
+        "005 MacBook AABB any " + "ab" * 32 + "\n",
+    ])
+    def test_bad_key_aborts_before_launchd(self, harness, content):
+        _install_agent_auth_script(harness, 'exit 0\n')
+        _install_launchctl_script(harness, 'exit 0\n')
+        key_file = harness["tmp_path"] / "key"
+        key_file.write_text(content)
+
+        result = _run(harness, extra_args=("--key-file", str(key_file)))
+        assert result.returncode != 0
+        status = _read_status(harness)
+        assert status["status"] == "failed" and status["error"] == "key_invalid"
+        assert not harness["client_keys"].exists()
+        assert not harness["agent_auth_calls"].exists()
+        assert not harness["launchctl_calls"].exists()
+
+    def test_symlink_to_other_file_is_not_copied(self, harness, tmp_path):
+        _install_agent_auth_script(harness, 'exit 0\n')
+        _install_launchctl_script(harness, 'exit 0\n')
+        secret = tmp_path / "secret"
+        secret.write_text("root:x:0:0:secret\n")
+        link = tmp_path / "link"
+        link.symlink_to(secret)
+        result = _run(harness, extra_args=("--key-file", str(link)))
+        assert result.returncode != 0
+        assert not harness["client_keys"].exists()
+        assert secret.exists()  # only the link is removed
+
+    def test_pattern_matches_the_app(self):
+        from plugins.wazuh.agent.enrollment import KEY_LINE_PATTERN
+        assert f"grep -Eqx '{KEY_LINE_PATTERN}'" in SCRIPT.read_text()
