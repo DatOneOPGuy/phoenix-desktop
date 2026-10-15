@@ -22,12 +22,12 @@ from utils import settings
 from utils.logger import logger
 from utils.windows_admin import is_admin as _is_admin
 
+from plugins.wazuh.agent import phoenix_packages
 from plugins.wazuh.config import (
     WAZUH_MANAGER,
     WAZUH_MANAGER_PORT,
     WAZUH_PROTOCOL,
     WAZUH_REGISTRATION_PORT,
-    WINDOWS_WAZUH_MSI_URL,
     WINDOWS_WAZUH_DIR,
     WINDOWS_SYSMON_ZIP_URL,
     WINDOWS_SYSMON_CONFIG_URL,
@@ -273,8 +273,8 @@ def get_agent_connection():
 
 
 def get_package_url():
-    """Return the Wazuh MSI download URL."""
-    return WINDOWS_WAZUH_MSI_URL
+    """Return the manifest URL of the Phoenix agent MSI."""
+    return phoenix_packages.manifest_url("windows")
 
 
 def _is_sysmon_installed():
@@ -471,17 +471,13 @@ def inject_defender_config():
 
 
 def download_package(progress_callback=None):
-    """Download the Wazuh MSI to a temporary directory.
+    """Download the signed Phoenix agent MSI (needs a Phoenix sign-in).
 
-    Returns the local path on success, or None on failure.
+    Returns the verified local path, or None on failure.
     """
-    url = get_package_url()
-    tmp_dir = tempfile.mkdtemp(prefix="wazuh_")
-    msi_path = os.path.join(tmp_dir, "wazuh-agent.msi")
-
-    if _download_file(url, msi_path, progress_callback, "Downloading Wazuh agent..."):
-        return msi_path
-    return None
+    return phoenix_packages.download_or_none(
+        tempfile.mkdtemp(prefix="phoenix_agent_"), progress_callback,
+        filename="phoenix-agent.msi")
 
 
 def _ensure_ossec_address():

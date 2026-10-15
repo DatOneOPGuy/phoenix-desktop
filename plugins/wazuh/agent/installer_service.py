@@ -10,14 +10,13 @@ Licensed under the GNU General Public License v2 or later
 """
 
 import os
-import subprocess
 import threading
 import time
 
 from utils import settings
 from utils.logger import logger
 
-from plugins.wazuh.config import WAZUH_VERSION
+from plugins.wazuh.agent import phoenix_packages
 
 # ---------------------------------------------------------------------------
 # State constants
@@ -42,7 +41,7 @@ _lock = threading.Lock()
 _CACHE_DIR = os.path.join(
     os.path.expanduser("~/Library/Application Support/Phoenix"), "cache"
 )
-_CACHED_PKG = os.path.join(_CACHE_DIR, "wazuh-agent.pkg")
+_CACHED_PKG = os.path.join(_CACHE_DIR, "phoenix-agent.pkg")
 
 
 # ---------------------------------------------------------------------------
@@ -96,12 +95,8 @@ def ensure_download_started(force: bool = False):
         if state == STATE_DOWNLOAD_FAILED and not _backoff_elapsed():
             return
 
-        # Version mismatch — invalidate cache
-        cached_version = settings.get(_NAMESPACE, "pkg_cached_version", "")
-        if cached_version and cached_version != WAZUH_VERSION:
-            _delete_cached_pkg()
-
-        # Already have a valid cached pkg
+        # Already have a valid cached pkg (download() replaces it when the
+        # server has a newer build)
         if os.path.isfile(_CACHED_PKG) and verify_package(_CACHED_PKG):
             _set_state(STATE_DOWNLOADED)
             settings.set(_NAMESPACE, "pkg_cached_path", _CACHED_PKG)
@@ -133,7 +128,8 @@ def trigger_install(app) -> bool:
         _set_state(STATE_INSTALLING)
 
     pkg_path = settings.get(_NAMESPACE, "pkg_cached_path", _CACHED_PKG)
-    if not os.path.isfile(pkg_path):
+    # Re-checked right before the root install: the cache is user-writable.
+    if not os.path.isfile(pkg_path) or not verify_package(pkg_path):
         _fail(STATE_INSTALL_FAILED, "pkg_corrupted")
         return False
 
@@ -246,27 +242,18 @@ def retry():
 
 
 def verify_package(pkg_path: str) -> bool:
-    """Verify Apple Developer ID signature. Non-negotiable."""
-    try:
-        result = subprocess.run(
-            ["pkgutil", "--check-signature", pkg_path],
-            capture_output=True, text=True, timeout=30,
-        )
-        output = result.stdout
-        if result.returncode != 0:
-            logger.warning(f"[INSTALLER] pkgutil returned {result.returncode}")
-            return False
-        if "Developer ID Installer" not in output:
-            logger.warning("[INSTALLER] Package missing Developer ID Installer signature")
-            return False
-        if "Wazuh" not in output:
-            logger.warning("[INSTALLER] Package not signed by Wazuh")
-            return False
-        logger.info("[INSTALLER] Package signature verified")
-        return True
-    except Exception as e:
-        logger.error(f"[INSTALLER] Signature verification failed: {e}")
+    """Verify the pkg against its minisign-signed Phoenix manifest. Non-negotiable.
+
+    The Phoenix pkg carries no Apple Developer ID signature; the manifest saved
+    next to it by download_package() is checked against the public key pinned
+    in the app, and the pkg against the manifest's sha512 and size.
+    """
+    manifest = phoenix_packages.verify_cached(pkg_path, "macos-arm64")
+    if not manifest:
+        logger.warning(f"[INSTALLER] {pkg_path} failed Phoenix signature verification")
         return False
+    logger.info(f"[INSTALLER] Package verified (Phoenix agent {manifest.dir})")
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -302,12 +289,8 @@ def _backoff_elapsed() -> bool:
 
 
 def _delete_cached_pkg():
-    """Remove cached package file."""
-    try:
-        if os.path.isfile(_CACHED_PKG):
-            os.unlink(_CACHED_PKG)
-    except OSError:
-        pass
+    """Remove cached package file and its signed manifest."""
+    phoenix_packages.remove_cached(_CACHED_PKG)
     settings.set(_NAMESPACE, "pkg_cached_path", "")
     settings.set(_NAMESPACE, "pkg_cached_version", "")
 
@@ -318,6 +301,8 @@ def _do_download():
 
     pkg_path = download_package(output_path=_CACHED_PKG)
     if not pkg_path:
+        # Network, sign-in and signature problems all land here; the log
+        # has the reason.
         _fail(STATE_DOWNLOAD_FAILED, "dns_failed")
         return
 
@@ -326,9 +311,10 @@ def _do_download():
         _fail(STATE_DOWNLOAD_FAILED, "signature_invalid")
         return
 
+    manifest = phoenix_packages.verify_cached(pkg_path, "macos-arm64")
     with _lock:
         settings.set(_NAMESPACE, "pkg_cached_path", pkg_path)
-        settings.set(_NAMESPACE, "pkg_cached_version", WAZUH_VERSION)
+        settings.set(_NAMESPACE, "pkg_cached_version", manifest.dir if manifest else "")
         settings.set(_NAMESPACE, "retry_count", 0)
         _set_state(STATE_DOWNLOADED)
 

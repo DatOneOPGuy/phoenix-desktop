@@ -90,10 +90,10 @@ INSTALLER_BIN="${INSTALLER_BIN:-installer}"
 SED_BIN="${SED_BIN:-sed}"
 SECURITY_BIN="${SECURITY_BIN:-security}"
 LAUNCHCTL_BIN="${LAUNCHCTL_BIN:-launchctl}"
-AGENT_AUTH_BIN="${AGENT_AUTH_BIN:-/Library/Ossec/bin/agent-auth}"
-WAZUH_CONTROL_BIN="${WAZUH_CONTROL_BIN:-/Library/Ossec/bin/wazuh-control}"
-OSSEC_CONF_OVERRIDE="${OSSEC_CONF_OVERRIDE:-/Library/Ossec/etc/ossec.conf}"
-CLIENT_KEYS_OVERRIDE="${CLIENT_KEYS_OVERRIDE:-/Library/Ossec/etc/client.keys}"
+AGENT_AUTH_BIN="${AGENT_AUTH_BIN:-/Library/Phoenix/bin/agent-auth}"
+WAZUH_CONTROL_BIN="${WAZUH_CONTROL_BIN:-/Library/Phoenix/bin/wazuh-control}"
+OSSEC_CONF_OVERRIDE="${OSSEC_CONF_OVERRIDE:-/Library/Phoenix/etc/ossec.conf}"
+CLIENT_KEYS_OVERRIDE="${CLIENT_KEYS_OVERRIDE:-/Library/Phoenix/etc/client.keys}"
 KEY_BACKUP_OVERRIDE="${KEY_BACKUP_OVERRIDE:-/Library/Application Support/Resistine/wazuh_client.keys}"
 PLIST_OVERRIDE="${PLIST_OVERRIDE:-/Library/LaunchDaemons/com.wazuh.agent.plist}"
 
@@ -257,14 +257,14 @@ if [ "$BOOTSTRAP_RC" -ne 0 ]; then
 fi
 
 # --- Make live agent state readable for the UI's connection status ---
-# wazuh-agentd.state + ossec.log are root-owned and /Library/Ossec/var/run isn't
+# wazuh-agentd.state + ossec.log are root-owned and /Library/Phoenix/var/run isn't
 # traversable by the (non-root) app, so get_agent_connection() reads "unknown".
 # Loosen the dirs + files so the UI can show connected/pending/disconnected.
 # wazuh-agentd truncate-writes the state file, so the mode persists.
 sleep 2
-chmod o+rx /Library/Ossec/var /Library/Ossec/var/run /Library/Ossec/logs 2>/dev/null || true
-chmod o+r /Library/Ossec/var/run/wazuh-agentd.state 2>/dev/null || true
-chmod o+r /Library/Ossec/logs/ossec.log 2>/dev/null || true
+chmod o+rx /Library/Phoenix/var /Library/Phoenix/var/run /Library/Phoenix/logs 2>/dev/null || true
+chmod o+r /Library/Phoenix/var/run/wazuh-agentd.state 2>/dev/null || true
+chmod o+r /Library/Phoenix/logs/ossec.log 2>/dev/null || true
 
 # --- Done ---
 write_status "{\"status\":\"success\",\"step\":\"done\",\"enrollment\":\"${ENROLLMENT_RESULT}\",\"agent_name\":\"${AGENT_NAME}\"}"

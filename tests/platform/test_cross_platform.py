@@ -93,17 +93,17 @@ class TestVPNConfigManagerCrossPlatform:
 # Wazuh: architecture mapping
 # ===========================================================================
 class TestWazuhArchMapping:
-    @pytest.mark.parametrize("machine,expected_arch", [
-        ("arm64", "arm64"),
-        ("x86_64", "intel64"),
-        ("unknown", "arm64"),  # fallback
+    @pytest.mark.parametrize("machine,expected", [
+        ("arm64", "/packages/macos-arm64/current/manifest.json"),
+        ("x86_64", None),  # Phoenix builds the macOS agent for Apple Silicon only
     ])
-    @patch("plugins.wazuh.agent.wazuh_functions_darwin.platform.machine")
-    def test_package_url_arch(self, mock_machine, machine, expected_arch):
+    @patch("plugins.wazuh.agent.phoenix_packages.platform.system", return_value="Darwin")
+    @patch("plugins.wazuh.agent.phoenix_packages.platform.machine")
+    def test_package_url_arch(self, mock_machine, _system, machine, expected):
         mock_machine.return_value = machine
         from plugins.wazuh.agent.wazuh_functions_darwin import get_package_url
         url = get_package_url()
-        assert expected_arch in url
+        assert (url is None) if expected is None else url.endswith(expected)
 
 
 # ===========================================================================
