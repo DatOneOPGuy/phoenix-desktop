@@ -19,7 +19,7 @@ import time
 from utils import settings
 from utils.logger import logger
 
-from plugins.wazuh.agent import phoenix_packages
+from plugins.wazuh.agent import enrollment, phoenix_packages
 from plugins.wazuh.config import (
     WAZUH_ENV_FILE,
     WAZUH_INSTALL_DIR,
@@ -564,11 +564,22 @@ def reenroll_agent():
     base = get_agent_name()
     new_name = f"{base}-{str(int(time.time()))[-6:]}"
     group = get_agent_group()
+    # The Phoenix API answers with the manager's current key for this device
+    # (a new agent if the old one was deleted there); else agent-auth.
+    enrolled = enrollment.request(new_name)
+    if enrolled:
+        new_name = enrolled.agent_name
     # new_name also lands unquoted inside a sed expression below.
     if not (_SAFE_TOKEN_RE.match(new_name) and _SAFE_TOKEN_RE.match(group)):
+        enrollment.discard(enrolled)
         return (False, "Unsafe agent name or group")
     agent_auth = f"{WAZUH_INSTALL_DIR}/bin/agent-auth"
     ossec_conf = f"{WAZUH_INSTALL_DIR}/etc/ossec.conf"
+    if enrolled:
+        register = enrollment.key_write_sh(enrolled.key_file, _CLIENT_KEYS)
+    else:
+        # Register a brand-new agent identity (matches the postinstall flags).
+        register = f"{_sh(agent_auth)} -m {_sh(WAZUH_MANAGER)} -A {_sh(new_name)} -G {_sh(group)} 2>&1"
 
     script = (
         # Stop cleanly so the new key is what gets loaded on restart.
@@ -579,8 +590,7 @@ def reenroll_agent():
         f"rm -f {_sh(_CLIENT_KEYS)} {_sh(_KEY_BACKUP)}; "
         f"security delete-generic-password -s {_sh(_KC_SERVICE)} -a {_sh(_KC_ACCOUNT)} "
         f"{_sh(_KEYCHAIN)} 2>/dev/null; "
-        # Register a brand-new agent identity (matches the postinstall flags).
-        f"{_sh(agent_auth)} -m {_sh(WAZUH_MANAGER)} -A {_sh(new_name)} -G {_sh(group)} 2>&1; "
+        f"{register}; "
         # Enrollment must have produced a key — otherwise starting is pointless.
         f"if [ ! -s {_sh(_CLIENT_KEYS)} ]; then echo REENROLL_NO_KEY; exit 1; fi; "
         f"chmod 640 {_sh(_CLIENT_KEYS)} && chown root:wazuh {_sh(_CLIENT_KEYS)}; "
@@ -597,6 +607,7 @@ def reenroll_agent():
         f"echo REENROLL_OK"
     )
     success, output = _run_privileged(script, timeout=180)
+    enrollment.discard(enrolled)
     if success and "REENROLL_OK" in output and "REENROLL_NO_KEY" not in output:
         logger.info(f"Wazuh re-enrolled under fresh name {new_name}")
         return (True, f"Re-enrolled as {new_name}")
@@ -656,7 +667,7 @@ def _stage_pkg_env_cmd(content):
     )
 
 
-def _launch_postinstall(pkg_path, agent_name, agent_group, restore_keys):
+def _launch_postinstall(pkg_path, agent_name, agent_group, restore_keys, key_file=None):
     """Launch the postinstall script with admin privileges via osascript.
 
     Copies the script to /tmp/ before execution because macOS Sequoia's
@@ -699,6 +710,10 @@ def _launch_postinstall(pkg_path, agent_name, agent_group, restore_keys):
     ]
     if restore_keys:
         args.append("--restore-keys")
+    if key_file:
+        # Server-side enrollment (enrollment.request); the script checks the
+        # line's shape, installs it as client.keys and deletes the file.
+        args.append(f"--key-file {shlex.quote(key_file)}")
 
     script_cmd = f"{shlex.quote(tmp_script)} {' '.join(args)}"
     # Wazuh's .pkg scripts read /tmp/wazuh_envs: stage it as root, run the
@@ -771,9 +786,13 @@ def full_install(progress_callback=None):
             progress_callback("Download failed")
         return False
 
-    # 2. Resolve agent name/group (group is auto-created server-side on enroll).
+    # 2. Resolve agent name/group. The Phoenix API enrolls server side, in
+    #    the user's group; without it the script runs agent-auth.
     agent_name = get_agent_name()
     agent_group = get_agent_group()
+    enrolled = enrollment.request(agent_name)
+    if enrolled:
+        agent_name = enrolled.agent_name
 
     if not write_env_file(agent_name, agent_group):
         if progress_callback:
@@ -789,9 +808,11 @@ def full_install(progress_callback=None):
     # request.  Server-side groups are auto-created on enroll; restoring a
     # stale client.keys would skip that.
     launched, status_file = _launch_postinstall(
-        pkg_path, agent_name, agent_group, restore_keys=False
+        pkg_path, agent_name, agent_group, restore_keys=False,
+        key_file=enrolled.key_file if enrolled else None,
     )
     if not launched:
+        enrollment.discard(enrolled)
         logger.error("Failed to launch postinstall script (user cancelled or osascript error)")
         if progress_callback:
             progress_callback("Installation failed")
