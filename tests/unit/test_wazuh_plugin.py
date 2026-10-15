@@ -25,6 +25,12 @@ class TestWazuhConfig:
         assert wazuh_config.WAZUH_MANAGER
         assert "." in wazuh_config.WAZUH_MANAGER
 
+    def test_wazuh5_manager_endpoint(self):
+        # 5.0 agents talk HTTPS on 1517; 1514 (the 4.x channel) would be
+        # written into <endpoint> and the agent would never connect.
+        assert wazuh_config.WAZUH_MANAGER_PORT == "1517"
+        assert wazuh_config.WAZUH_MANAGER_ENDPOINT == f"{wazuh_config.WAZUH_MANAGER}:1517"
+
     def test_phoenix_install_dirs(self):
         assert wazuh_config.WAZUH_INSTALL_DIR == "/Library/Phoenix"
         assert wazuh_config.LINUX_WAZUH_DIR == "/opt/phoenix-agent"

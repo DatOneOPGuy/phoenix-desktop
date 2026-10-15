@@ -13,9 +13,14 @@ import tempfile
 
 # --- Manager Connection ---
 WAZUH_MANAGER = "dashboard.phoenix.exposed"
-WAZUH_MANAGER_PORT = "1514"
+# Wazuh 5.0: agents reach the manager over HTTPS on 1517 (written into
+# <manager><endpoint>host:1517</endpoint>; 1514 was the 4.x channel) and enroll
+# on 1515. WAZUH_PROTOCOL only meant something to 4.x installers.
+WAZUH_MANAGER_PORT = "1517"
 WAZUH_REGISTRATION_PORT = "1515"
 WAZUH_PROTOCOL = "tcp"
+# What the installers write from WAZUH_MANAGER + WAZUH_MANAGER_PORT.
+WAZUH_MANAGER_ENDPOINT = f"{WAZUH_MANAGER}:{WAZUH_MANAGER_PORT}"
 
 # --- Paths ---
 # The Phoenix macOS agent (Resistine-Server-install build_agent_macos.sh) moves

@@ -140,7 +140,8 @@ def _set_ossec_agent_name(ossec_conf, agent_name):
       1. <agent_name> already present  -> replace it
       2. <enrollment> present, no name -> insert <agent_name> into it
       3. neither                       -> insert a full <enrollment> block
-                                          before </client>
+                                          at the end of <agent> (5.0), or of
+                                          <client> in a config kept from 4.x
     """
     return (
         f"if grep -q '<agent_name>' '{ossec_conf}'; then "
@@ -148,7 +149,8 @@ def _set_ossec_agent_name(ossec_conf, agent_name):
         f"elif grep -q '<enrollment>' '{ossec_conf}'; then "
         f"sed -i 's|<enrollment>|<enrollment>\\n      <agent_name>{agent_name}</agent_name>|' '{ossec_conf}'; "
         f"else "
-        f"sed -i 's|</client>|  <enrollment>\\n      <agent_name>{agent_name}</agent_name>\\n    </enrollment>\\n  </client>|' '{ossec_conf}'; "
+        f"tag=client; grep -q '</agent>' '{ossec_conf}' && tag=agent; "
+        f"sed -i \"s|</$tag>|  <enrollment>\\n      <agent_name>{agent_name}</agent_name>\\n    </enrollment>\\n  </$tag>|\" '{ossec_conf}'; "
         f"fi"
     )
 
