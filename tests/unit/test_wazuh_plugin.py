@@ -17,26 +17,18 @@ from plugins.wazuh import config as wazuh_config
 
 @pytest.mark.unit
 class TestWazuhConfig:
-    def test_version_format(self):
-        assert "-" in wazuh_config.WAZUH_VERSION  # e.g., "4.14.2-1"
-
-    def test_arch_map_has_known_archs(self):
-        assert "arm64" in wazuh_config.WAZUH_PKG_ARCH_MAP
-        assert "x86_64" in wazuh_config.WAZUH_PKG_ARCH_MAP
+    def test_no_upstream_package_urls(self):
+        # Agents come only from the signed Phoenix package store.
+        assert not [n for n in dir(wazuh_config) if n.endswith("_URL") and "WAZUH" in n]
 
     def test_manager_is_set(self):
         assert wazuh_config.WAZUH_MANAGER
         assert "." in wazuh_config.WAZUH_MANAGER
 
-    def test_linux_deb_url_has_placeholder(self):
-        assert "{arch}" in wazuh_config.LINUX_WAZUH_DEB_URL
-
-    def test_linux_rpm_url_has_placeholder(self):
-        assert "{arch}" in wazuh_config.LINUX_WAZUH_RPM_URL
-
-    def test_linux_arch_maps(self):
-        assert wazuh_config.LINUX_PKG_ARCH_MAP_DEB["x86_64"] == "amd64"
-        assert wazuh_config.LINUX_PKG_ARCH_MAP_RPM["x86_64"] == "x86_64"
+    def test_phoenix_install_dirs(self):
+        assert wazuh_config.WAZUH_INSTALL_DIR == "/Library/Phoenix"
+        assert wazuh_config.LINUX_WAZUH_DIR == "/opt/phoenix-agent"
+        assert wazuh_config.LINUX_WAZUH_DIR in wazuh_config.LINUX_WAZUH_DIR_CANDIDATES
 
     def test_paths_are_absolute(self):
         assert wazuh_config.WAZUH_INSTALL_DIR.startswith("/")

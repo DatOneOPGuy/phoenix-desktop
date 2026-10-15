@@ -8,7 +8,7 @@
 # What this does (idempotent):
 #   1. Bootout + disable the launchd service (clears the throttle).
 #   2. Stop any straggler wazuh-* daemons (graceful — NO SIGKILL on agentd).
-#   3. Wipe /Library/Ossec, the client.keys file backup, and the System
+#   3. Wipe /Library/Phoenix, the client.keys file backup, and the System
 #      Keychain entry, so the next install enrolls fresh.
 #   4. Clear the Phoenix app's stored install state so the UI no longer
 #      thinks the agent is installed.
@@ -31,7 +31,7 @@ if [ "$EUID" -ne 0 ]; then
     exec sudo bash "$0" "$@"
 fi
 
-WAZUH_DIR="/Library/Ossec"
+WAZUH_DIR="/Library/Phoenix"
 PLIST="/Library/LaunchDaemons/com.wazuh.agent.plist"
 KEY_BACKUP="/Library/Application Support/Resistine/wazuh_client.keys"
 KEYCHAIN="/Library/Keychains/System.keychain"
@@ -52,7 +52,7 @@ if [ -x "$WAZUH_DIR/bin/wazuh-control" ]; then
 fi
 sleep 1
 
-echo "[3/5] Removing /Library/Ossec and launchd plist…"
+echo "[3/5] Removing /Library/Phoenix and launchd plist…"
 rm -rf "$WAZUH_DIR"
 rm -f  "$PLIST"
 rm -rf "/Library/StartupItems/WAZUH"

@@ -7,25 +7,17 @@ Licensed under the GNU General Public License v2 or later
 """
 
 import os
-import platform
 import socket
 import subprocess
 import tempfile
 import re
-import shutil
-import ssl
-import urllib.error
-import urllib.request
 
 from utils import settings
 from utils.logger import logger
 from gui.dialogs import CTkPasswordDialog
 
+from plugins.wazuh.agent import phoenix_packages
 from plugins.wazuh.config import (
-    LINUX_WAZUH_DEB_URL,
-    LINUX_WAZUH_RPM_URL,
-    LINUX_PKG_ARCH_MAP_DEB,
-    LINUX_PKG_ARCH_MAP_RPM,
     WAZUH_MANAGER,
     WAZUH_MANAGER_PORT,
     WAZUH_PROTOCOL,
@@ -222,16 +214,13 @@ def _get_os_info():
     return None
 
 def get_package_url():
-    arch = platform.machine()
-    os_type = _get_os_info()
-    if os_type == "deb":
-        arch_suffix = LINUX_PKG_ARCH_MAP_DEB.get(arch, "amd64")
-        return LINUX_WAZUH_DEB_URL.format(arch=arch_suffix)
-    elif os_type == "rpm" or os_type == "arch":
-        # Arch uses the RPM artifact and extracts it with bsdtar (libarchive); upstream Wazuh ships no pacman package
-        arch_suffix = LINUX_PKG_ARCH_MAP_RPM.get(arch, "x86_64")
-        return LINUX_WAZUH_RPM_URL.format(arch=arch_suffix)
-    return None
+    """Manifest URL of the Phoenix agent for this machine, or None.
+
+    Phoenix builds the Linux agent as an amd64 .deb only.
+    """
+    if _get_os_info() != "deb":
+        return None
+    return phoenix_packages.manifest_url()
 
 def installed_agent_dir():
     """Return the install dir of an existing agent, or None.
@@ -249,14 +238,19 @@ def is_agent_installed():
     return installed_agent_dir() is not None
 
 
-def is_app_managed_agent():
-    """True only for the agent this app installs (upstream package, /var/ossec).
+_APP_INSTALLED = "app_installed"  # wazuh settings flag, set by full_install()
 
-    An agent under another candidate dir was installed some other way (the
-    Phoenix package, the NixOS module); the app shows it but never removes or
-    re-enrolls it.
+
+def is_app_managed_agent():
+    """True only for the agent this app installed (the Phoenix .deb in
+    /opt/phoenix-agent, installed by full_install()).
+
+    The same package may also have been installed by an admin, and an agent
+    under another candidate dir was installed some other way (an upstream
+    package, the NixOS module); the app shows those but never removes or
+    re-enrolls them.
     """
-    return os.path.isdir(LINUX_WAZUH_DIR)
+    return os.path.isdir(LINUX_WAZUH_DIR) and bool(settings.get("wazuh", _APP_INSTALLED, False))
 
 def get_agent_status():
     if not is_agent_installed():
@@ -303,41 +297,19 @@ def get_agent_connection():
         os.path.join(agent_dir, "logs", "ossec.log"),
     )
 
-_DOWNLOAD_TIMEOUT = 60  # seconds per socket operation
-
 def download_package(progress_callback=None):
-    url = get_package_url()
-    if not url:
-        logger.error("Unsupported OS type or architecture for Wazuh install")
-        return None
-        
-    tmp_dir = tempfile.mkdtemp(prefix="wazuh_")
-    filename = url.split("/")[-1]
-    pkg_path = os.path.join(tmp_dir, filename)
+    """Download the signed Phoenix agent .deb (needs a Phoenix sign-in).
 
-    if progress_callback:
-        progress_callback("Downloading Wazuh agent...")
-
-    logger.info(f"Downloading Wazuh package from {url}")
-    try:
-        # urlopen verifies TLS certificates by default; pass an explicit
-        # default context anyway, plus a timeout so a stalled server can't
-        # hang the install thread forever (urlretrieve has no timeout).
-        ctx = ssl.create_default_context()
-        with urllib.request.urlopen(url, timeout=_DOWNLOAD_TIMEOUT, context=ctx) as resp, \
-                open(pkg_path, "wb") as out:
-            shutil.copyfileobj(resp, out)
-        logger.info(f"Downloaded to {pkg_path}")
-        return pkg_path
-    except urllib.error.HTTPError as e:
-        logger.error(f"Download failed: HTTP {e.code} {e.reason}")
+    Returns the verified local path, or None.
+    """
+    if not get_package_url():
+        msg = "Phoenix builds the Linux agent for Debian/Ubuntu (amd64) only."
+        logger.error(msg)
+        if progress_callback:
+            progress_callback(msg)
         return None
-    except urllib.error.URLError as e:
-        logger.error(f"Download failed: {e.reason}")
-        return None
-    except Exception as e:
-        logger.error(f"Download error: {e}")
-        return None
+    return phoenix_packages.download_or_none(
+        tempfile.mkdtemp(prefix="phoenix_agent_"), progress_callback)
 
 def write_env_file(agent_name, agent_group):
     # Not using env file for Linux, we'll pass via environment to the installer or patch ossec.conf
@@ -485,8 +457,8 @@ def build_remove_script(wipe_keys: bool = False) -> str:
         )
 
     if not is_app_managed_agent():
-        # The only agent (if any) was installed some other way (Phoenix
-        # package, NixOS module). Its service, unit and wazuh user belong to
+        # The only agent (if any) was installed some other way (by an admin,
+        # an upstream package, the NixOS module). Its service, unit and wazuh user belong to
         # that install, so only the app's key backup is touched.
         return f"""
         {key_phase if wipe_keys else ""}
@@ -522,9 +494,12 @@ def remove_agent(wipe_keys: bool = False):
     if not agent_present(wipe_keys):
         return True
 
+    managed = is_app_managed_agent()
     script = build_remove_script(wipe_keys)
     success, output = run_privileged_command(["sh", "-c", script])
     if success:
+        if managed:
+            settings.set("wazuh", _APP_INSTALLED, False)
         logger.info("Wazuh agent removed successfully")
     else:
         logger.error(f"Failed to remove Wazuh agent: {output}")
@@ -591,6 +566,7 @@ def full_install(progress_callback=None):
     success, output = run_privileged_command(["sh", "-c", script])
     
     if success or is_agent_installed():
+        settings.set("wazuh", _APP_INSTALLED, True)
         settings.set("wazuh", "enrolled_email", settings.get("auth", "email", ""))
         if progress_callback:
             progress_callback("Wazuh agent installed and running")

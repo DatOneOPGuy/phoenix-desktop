@@ -386,26 +386,27 @@ class TestWindowsPowerShellQuoting:
 
 
 # ===========================================================================
-# Linux: download has explicit TLS context + timeout
+# Linux: the agent only comes from the signed Phoenix package store
 # ===========================================================================
 @pytest.mark.unit
 @pytest.mark.security
 class TestLinuxDownload:
-    def test_download_uses_timeout_and_tls_context(self, tmp_path):
-        import ssl
-
+    def test_download_goes_through_phoenix_packages(self, tmp_path):
         from plugins.wazuh.agent import wazuh_functions_linux as wf
 
-        resp = MagicMock()
-        resp.__enter__.return_value = resp
-        resp.read.side_effect = [b"pkg", b""]
-        with patch.object(wf, "get_package_url", return_value="https://x/wazuh.deb"), \
+        with patch.object(wf, "_get_os_info", return_value="deb"), \
+                patch.object(wf.phoenix_packages, "manifest_url", return_value="https://x/m.json"), \
                 patch.object(wf.tempfile, "mkdtemp", return_value=str(tmp_path)), \
-                patch.object(wf.urllib.request, "urlopen", return_value=resp) as uo:
-            path = wf.download_package()
-        assert path == str(tmp_path / "wazuh.deb")
-        kw = uo.call_args.kwargs
-        assert kw["timeout"] > 0
-        ctx = kw["context"]
-        assert isinstance(ctx, ssl.SSLContext)
-        assert ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname
+                patch.object(wf.phoenix_packages, "download_or_none",
+                             return_value=str(tmp_path / "a.deb")) as dl:
+            assert wf.download_package() == str(tmp_path / "a.deb")
+        assert dl.call_args.args[0] == str(tmp_path)
+
+    @pytest.mark.parametrize("os_type", ["rpm", "arch", None])
+    def test_no_package_for_non_debian(self, os_type):
+        from plugins.wazuh.agent import wazuh_functions_linux as wf
+
+        with patch.object(wf, "_get_os_info", return_value=os_type), \
+                patch.object(wf.phoenix_packages, "download_or_none") as dl:
+            assert wf.download_package() is None
+        dl.assert_not_called()

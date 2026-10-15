@@ -242,32 +242,31 @@ class TestGetAgentStatus:
 # ===========================================================================
 @pytest.mark.unit
 class TestGetPackageUrl:
-    @patch("plugins.wazuh.agent.wazuh_functions_darwin.platform.machine", return_value="arm64")
-    def test_arm64_url(self, _):
+    @patch("plugins.wazuh.agent.phoenix_packages.platform.system", return_value="Darwin")
+    @patch("plugins.wazuh.agent.phoenix_packages.platform.machine", return_value="arm64")
+    def test_arm64_url(self, *_):
         from plugins.wazuh.agent.wazuh_functions_darwin import get_package_url
-        url = get_package_url()
-        assert "arm64" in url
-        assert url.startswith("https://packages.wazuh.com/4.x/macos/")
-        assert url.endswith(".pkg")
+        assert get_package_url() == \
+            "https://auth.phoenix.exposed/packages/macos-arm64/current/manifest.json"
 
-    @patch("plugins.wazuh.agent.wazuh_functions_darwin.platform.machine", return_value="x86_64")
-    def test_x86_64_url(self, _):
+    @patch("plugins.wazuh.agent.phoenix_packages.platform.system", return_value="Darwin")
+    @patch("plugins.wazuh.agent.phoenix_packages.platform.machine", return_value="x86_64")
+    def test_intel_has_no_package(self, *_):
         from plugins.wazuh.agent.wazuh_functions_darwin import get_package_url
-        url = get_package_url()
-        assert "intel64" in url
+        assert get_package_url() is None
 
-    @patch("plugins.wazuh.agent.wazuh_functions_darwin.platform.machine", return_value="unknown_arch")
-    def test_unknown_arch_defaults_to_arm64(self, _):
-        from plugins.wazuh.agent.wazuh_functions_darwin import get_package_url
-        url = get_package_url()
-        assert "arm64" in url
 
-    @patch("plugins.wazuh.agent.wazuh_functions_darwin.platform.machine", return_value="arm64")
-    def test_url_contains_version(self, _):
-        from plugins.wazuh.agent.wazuh_functions_darwin import get_package_url
-        from plugins.wazuh.config import WAZUH_VERSION
-        url = get_package_url()
-        assert WAZUH_VERSION in url
+@pytest.mark.unit
+class TestDownloadPackageDelegates:
+    def test_output_path_split_into_dir_and_name(self, tmp_path):
+        from plugins.wazuh.agent import wazuh_functions_darwin as wf
+        target = tmp_path / "cache" / "phoenix-agent.pkg"
+        with patch.object(wf.phoenix_packages, "download_or_none",
+                          return_value=str(target)) as dl:
+            assert wf.download_package(output_path=str(target)) == str(target)
+        args, kwargs = dl.call_args
+        assert args[0] == str(target.parent)
+        assert kwargs["filename"] == "phoenix-agent.pkg"
 
 
 # ===========================================================================

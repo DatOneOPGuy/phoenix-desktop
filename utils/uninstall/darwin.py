@@ -380,7 +380,7 @@ def _collect_wazuh_admin_cmds(admin_cmds):
     prompts. Now we emit the same commands inline so they batch with
     the rest of the privileged cleanup. wipe_keys=True semantics
     (logout-style full identity wipe) is embedded directly: delete
-    /Library/Ossec, the launchd plist, the key backup file, and the
+    /Library/Phoenix, the launchd plist, the key backup file, and the
     System Keychain entry.
     """
     # Wazuh constants — keep in sync with plugins.wazuh.config /
@@ -403,9 +403,9 @@ def _collect_wazuh_admin_cmds(admin_cmds):
         )
     except ImportError:
         # Fallback paths matching the plugin's defaults.
-        _WAZUH_CONTROL = "/Library/Ossec/bin/wazuh-control"
+        _WAZUH_CONTROL = "/Library/Phoenix/bin/wazuh-control"
         WAZUH_LAUNCHD_PLIST = "/Library/LaunchDaemons/com.wazuh.agent.plist"
-        WAZUH_INSTALL_DIR = "/Library/Ossec"
+        WAZUH_INSTALL_DIR = "/Library/Phoenix"
         _KEY_BACKUP = "/Library/Application Support/Resistine/wazuh_client.keys"
         _KC_SERVICE = "com.resistine.wazuh.client.keys"
         _KC_ACCOUNT = "wazuh-agent"

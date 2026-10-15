@@ -38,9 +38,9 @@ class TestDarwinConfigDir:
 # Wazuh paths
 # ===========================================================================
 class TestWazuhPaths:
-    def test_install_dir_is_library_ossec(self):
+    def test_install_dir_is_library_phoenix(self):
         from plugins.wazuh.config import WAZUH_INSTALL_DIR
-        assert WAZUH_INSTALL_DIR == "/Library/Ossec"
+        assert WAZUH_INSTALL_DIR == "/Library/Phoenix"
 
     def test_launchd_plist_path(self):
         from plugins.wazuh.config import WAZUH_LAUNCHD_PLIST
@@ -55,8 +55,8 @@ class TestWazuhPaths:
     def test_wazuh_control_binary_path(self):
         from plugins.wazuh.config import WAZUH_INSTALL_DIR
         control_path = f"{WAZUH_INSTALL_DIR}/bin/wazuh-control"
-        # Path should be rooted at /Library/Ossec
-        assert control_path.startswith("/Library/Ossec")
+        # Path should be rooted at /Library/Phoenix
+        assert control_path.startswith("/Library/Phoenix")
 
 
 # ===========================================================================
@@ -65,14 +65,14 @@ class TestWazuhPaths:
 class TestIsAgentInstalledDarwin:
     @patch("plugins.wazuh.agent.wazuh_functions_darwin.os.path.isdir")
     @patch("plugins.wazuh.agent.wazuh_functions_darwin.os.path.exists")
-    def test_checks_library_ossec(self, mock_exists, mock_isdir):
+    def test_checks_library_phoenix(self, mock_exists, mock_isdir):
         mock_isdir.return_value = True
         mock_exists.return_value = False
         from plugins.wazuh.agent.wazuh_functions_darwin import is_agent_installed
         is_agent_installed()
-        # Should check /Library/Ossec
+        # Should check /Library/Phoenix
         checked_paths = [str(call.args[0]) for call in mock_isdir.call_args_list]
-        assert any("/Library/Ossec" in p for p in checked_paths)
+        assert any("/Library/Phoenix" in p for p in checked_paths)
 
     @patch("plugins.wazuh.agent.wazuh_functions_darwin.os.path.isdir")
     @patch("plugins.wazuh.agent.wazuh_functions_darwin.os.path.exists")
