@@ -102,7 +102,7 @@ This script:
 6. Creates a DMG, notarizes, and staples it
 7. Installs to `/Applications/`
 
-Output: `dist/Phoenix-Installer.dmg` (contains `Resistine.app`; the bundle keeps its pre-rebrand file name for now)
+Output: `dist/Phoenix-Installer.dmg` (contains `Phoenix.app`)
 
 ### Local Dev Build (signed, not notarized)
 
@@ -140,6 +140,31 @@ Requirements:
 - Inno Setup 6 (`ISCC.exe`) installed
 
 The installer bundles Python dependencies via PyInstaller and attempts to install WireGuard and GTK3 runtime via `winget`.
+
+## NixOS
+
+The flake ships a NixOS module that installs Phoenix together with the
+services it drives (ClamAV, the Phoenix SIEM agent, what the VPN needs):
+
+```nix
+# flake.nix
+inputs.phoenix.url = "git+https://gitlab.phoenix.exposed/francis/Resistine-Desktop?ref=feat/phoenix-rebrand";
+
+# in your nixosSystem modules
+imports = [ inputs.phoenix.nixosModules.default ];
+programs.phoenix.enable = true;
+services.wazuh-agent.enrollmentPasswordFile = "/etc/wazuh-agent/authd.pass";  # root-only, not in the store
+```
+
+Options: `programs.phoenix.{package, antivirus.{enable,package,realtime},
+siem.enable, vpn.{enable,looseReversePath}}`, plus `services.wazuh-agent.*`
+for the agent (manager, SCA policy, extra ossec.conf). The SIEM agent is
+x86_64 only and its `.deb` is not public: add it with
+`nix-store --add-fixed sha256 phoenix-agent_5.0.0-1_amd64.deb`, or set
+`programs.phoenix.siem.enable = false`.
+
+`nix build .#checks.x86_64-linux.nixos-module -L` boots a VM with the module
+and checks the app, the services and a headless start.
 
 ## Testing the Build
 

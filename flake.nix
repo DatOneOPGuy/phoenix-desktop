@@ -9,8 +9,17 @@
   # Linux only: the macOS and Windows builds go through PyInstaller
   # (packaging/Resistine.spec), and the runtime deps below (secretstorage,
   # jeepney, wireguard-tools, libnotify) are Linux-specific.
+  #
+  # nixosModules.default (nix/module.nix) installs the app together with the
+  # services it drives: programs.phoenix.enable = true.
   outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (system:
+    {
+      nixosModules = rec {
+        default = phoenix;
+        phoenix = import ./nix/module.nix self;
+      };
+    }
+    // flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
         inherit (pkgs) lib;
@@ -126,6 +135,10 @@
           # this attribute keeps both paths on one version that has the cert.
           inherit (pkgs) clamav;
 
+          # The Phoenix SIEM agent (amd64 only; its .deb is added to the store
+          # by hand, see nix/phoenix-agent.nix).
+          phoenix-agent = pkgs.callPackage ./nix/phoenix-agent.nix { };
+
           phoenix = pkgs.stdenv.mkDerivation {
             pname = "phoenix";
             inherit version;
@@ -219,7 +232,13 @@
           program = "${self.packages.${system}.phoenix}/bin/phoenix";
         };
 
-        checks.default = self.packages.${system}.phoenix;
+        checks = {
+          default = self.packages.${system}.phoenix;
+        } // lib.optionalAttrs (system == "x86_64-linux") {
+          # Boots a VM with programs.phoenix.enable (needs /dev/kvm and the
+          # phoenix-agent .deb in the store).
+          nixos-module = import ./nix/test.nix { inherit self pkgs; };
+        };
 
         devShells = {
           # Default shell: every Python dep comes from nixpkgs, so `python
