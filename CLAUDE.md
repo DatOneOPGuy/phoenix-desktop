@@ -61,6 +61,10 @@ Configured linters: ruff, black, isort, bandit, shellcheck, shfmt, markdownlint,
 
 Runs `scripts/build/build-windows-installer.ps1` (PyInstaller + Inno Setup) over SSH in a throwaway copy of the golden Windows image from `Resistine-Server-install/scripts/windows/make_golden.sh` (dockur/windows, needs docker and /dev/kvm). Set `GOLDEN_DIR` if the image is not in `/var/lib/phoenix-win/golden`, and `BUILD_DIR` off tmpfs (the VM disk copy is sparse, up to 64 GB). The installer must stay silent-safe: WinSparkle upgrades run it with `/VERYSILENT /SUPPRESSMSGBOXES`, so use `SuppressibleMsgBox`, never `MsgBox`.
 
+### NixOS
+
+`flake.nix` builds the app (`packages.phoenix`) and exports `nixosModules.default` (`nix/module.nix`: `programs.phoenix.*`, plus the SIEM agent service in `nix/wazuh-agent.nix`). On NixOS the app can't install packages or write `/etc`, so ClamAV units, the agent and the VPN prerequisites come from this module. VM test: `nix build .#checks.x86_64-linux.nixos-module -L` (needs the phoenix-agent `.deb` in the store).
+
 ## Architecture
 
 ### Plugin System
