@@ -118,25 +118,25 @@ jobs:
 
       - name: Verify .app bundle exists
         run: |
-          test -d dist/Resistine.app/Contents/MacOS
-          echo "Build artifact verified: dist/Resistine.app"
+          test -d dist/Phoenix.app/Contents/MacOS
+          echo "Build artifact verified: dist/Phoenix.app"
 
       - name: Smoke test — app launches and stays alive
         run: |
           # Launch the app in the background
-          open dist/Resistine.app &
+          open dist/Phoenix.app &
           APP_PID=$!
 
           # Wait for the process to start
           sleep 5
 
           # Check if the Resistine process is running
-          if pgrep -f "Resistine" > /dev/null; then
+          if pgrep -f "Phoenix" > /dev/null; then
             echo "Smoke test passed: Resistine is running"
             # Clean up — quit gracefully, then force-kill if needed
-            pkill -f "Resistine" || true
+            pkill -f "Phoenix" || true
             sleep 2
-            pkill -9 -f "Resistine" 2>/dev/null || true
+            pkill -9 -f "Phoenix" 2>/dev/null || true
           else
             echo "Smoke test FAILED: Resistine did not stay running"
             # Check if it crashed — look for crash logs
@@ -178,17 +178,17 @@ jobs:
 
       - name: Verify build output exists
         run: |
-          if (Test-Path "dist/Resistine") { Write-Output "Build artifact verified: dist/Resistine" }
-          elseif (Test-Path "dist/Resistine.exe") { Write-Output "Build artifact verified: dist/Resistine.exe" }
+          if (Test-Path "dist/Phoenix") { Write-Output "Build artifact verified: dist/Phoenix" }
+          elseif (Test-Path "dist/Phoenix.exe") { Write-Output "Build artifact verified: dist/Phoenix.exe" }
           else { Write-Error "No build artifact found"; exit 1 }
 
       - name: Smoke test — app launches and stays alive
         run: |
           # Find the executable
-          if (Test-Path "dist/Resistine/Resistine.exe") {
-            $exe = "dist/Resistine/Resistine.exe"
-          } elseif (Test-Path "dist/Resistine.exe") {
-            $exe = "dist/Resistine.exe"
+          if (Test-Path "dist/Phoenix/Phoenix.exe") {
+            $exe = "dist/Phoenix/Phoenix.exe"
+          } elseif (Test-Path "dist/Phoenix.exe") {
+            $exe = "dist/Phoenix.exe"
           } else {
             Write-Error "No executable found for smoke test"
             exit 1
@@ -246,16 +246,16 @@ jobs:
 
       - name: Verify build output exists
         run: |
-          test -f dist/Resistine || test -d dist/Resistine
-          echo "Build artifact verified: dist/Resistine"
+          test -f dist/Phoenix || test -d dist/Phoenix
+          echo "Build artifact verified: dist/Phoenix"
 
       - name: Smoke test — app launches and stays alive
         run: |
           # Find the executable
-          if [ -f dist/Resistine ]; then
-            EXE=dist/Resistine
-          elif [ -f dist/Resistine/Resistine ]; then
-            EXE=dist/Resistine/Resistine
+          if [ -f dist/Phoenix ]; then
+            EXE=dist/Phoenix
+          elif [ -f dist/Phoenix/Phoenix ]; then
+            EXE=dist/Phoenix/Phoenix
           else
             echo "No executable found for smoke test"
             exit 1
