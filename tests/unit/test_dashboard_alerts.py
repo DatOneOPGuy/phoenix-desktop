@@ -321,7 +321,7 @@ def test_ask_ai(qapp, isolated_settings, monkeypatch, tmp_path):
     plugin, siem_alerts, app = _plugin(qapp, monkeypatch, tmp_path, chat)
     plugin._ask_ai(HUNT)
     app.select_frame_by_name.assert_called_with("frame_Chat")
-    chat.ask_about_alert.assert_called_once_with(HUNT)
+    chat.ask_about_alert.assert_called_once_with(HUNT, None)
     chat.client = None
     app.select_frame_by_name.reset_mock()
     plugin._ask_ai(HUNT)
@@ -376,3 +376,16 @@ def test_panels_paint_strip_and_sparkline(qapp, isolated_settings, monkeypatch, 
     spark.resize(300, spark.height())
     spark.grab()
     plugin.destroy()
+
+
+def test_alert_question_keeps_the_server_marker_and_context():
+    from plugins.chat.main import ALERT_QUESTION, alert_question
+
+    q = alert_question(TRIAGE, ts=1_760_617_560)
+    assert q.startswith(ALERT_QUESTION)
+    assert q.lower().startswith("explain this phoenix siem alert")  # the server keys on this
+    assert "don't look up other alerts" in q
+    assert "AnubisAI" in q and "was sent" in q
+    assert q.rstrip().endswith("--- end of alert ---")
+    long = alert_question("x" * 9000, limit=100)
+    assert "(alert shortened)" in long and "x" * 101 not in long
