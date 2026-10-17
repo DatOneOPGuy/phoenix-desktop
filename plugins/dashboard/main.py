@@ -1032,7 +1032,7 @@ class Plugin(BasePlugin):
         ask.setIcon(QIcon(line_icon("message-circle", "#ffffff", 18)))
         ask.setCursor(Qt.CursorShape.PointingHandCursor)
         ask.setToolTip("Start a chat with Phoenix AI about this alert")
-        ask.clicked.connect(lambda: self._ask_ai(body))
+        ask.clicked.connect(lambda: self._ask_ai(body, alert.get("ts")))
         header.add_control(ask)
         page.add(header)
         if info["findings"]:
@@ -1063,7 +1063,7 @@ class Plugin(BasePlugin):
         h.addWidget(pill, 0, Qt.AlignmentFlag.AlignVCenter)
         return row
 
-    def _ask_ai(self, body: str) -> None:
+    def _ask_ai(self, body: str, ts=None) -> None:
         chat = next((p for p in getattr(self.app, "plugins", []) if p.get_name() == "Chat"), None)
         if chat is None or getattr(chat, "client", None) is None:
             self.app.show_notification(
@@ -1073,7 +1073,7 @@ class Plugin(BasePlugin):
 
         def go():
             try:
-                if not chat.ask_about_alert(body):
+                if not chat.ask_about_alert(body, ts):
                     self.app.show_notification("The chat isn't ready yet. Try again.", type="warning")
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"Dashboard: Ask AI failed: {e}")
