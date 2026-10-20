@@ -1,12 +1,12 @@
 #!/bin/bash
 set -e
 
-# Resistine Distribution Build Script
+# Phoenix Distribution Build Script
 # Builds, signs with Developer ID, creates DMG, notarizes, and staples.
 # Use build-installer.sh for local development/testing (Apple Development signing).
 # Use this script for public distribution (Developer ID + notarization).
 
-echo "=== Resistine Distribution Build ==="
+echo "=== Phoenix Distribution Build ==="
 echo "Building for public distribution (Developer ID + Notarization)"
 echo ""
 
@@ -28,7 +28,8 @@ echo ""
 # Build configuration
 BUILD_DIR="$VPN_PROJECT_PATH/build"
 DIST_DIR="$PYTHON_UI_PATH/dist"
-APP_NAME="Resistine"
+APP_NAME="Phoenix"   # bundle file name (Phoenix.app); see packaging/Resistine.spec
+DISPLAY_NAME="Phoenix" # what users see: installer title, DMG/pkg names
 BUNDLE_ID="com.resistine.desktop"
 
 # ============================================================
@@ -232,7 +233,7 @@ if [ ! -f "packaging/Resistine.spec" ]; then
     exit 1
 fi
 
-rm -rf dist/Resistine dist/Resistine.app
+rm -rf dist/Resistine dist/Resistine.app dist/Phoenix dist/Phoenix.app
 
 echo "  - Building with PyInstaller..."
 pyinstaller packaging/Resistine.spec --noconfirm
@@ -240,7 +241,7 @@ pyinstaller packaging/Resistine.spec --noconfirm
 echo "  Python UI built"
 
 # ============================================================
-# Step 4: Place VPN components directly in Resistine.app bundle
+# Step 4: Place VPN components directly in Phoenix.app bundle
 # ============================================================
 # Apple bundle structure requirements (from Apple documentation):
 #   - App Extensions (.appex): Contents/PlugIns/
@@ -251,7 +252,7 @@ echo "  Python UI built"
 # discovery looks for components relative to the parent bundle. If the XPC
 # service is nested inside wireguard-apple.app, it will look for the network
 # extension inside wireguard-apple.app/Contents/PlugIns/ instead of the main
-# Resistine.app/Contents/PlugIns/.
+# Phoenix.app/Contents/PlugIns/.
 echo ""
 echo "Step 4: Placing VPN components in main app bundle..."
 
@@ -363,7 +364,9 @@ cat > "$CLI_APP/Contents/Info.plist" << PLISTEOF
     <key>CFBundleIdentifier</key>
     <string>com.resistine.desktop.vpnxpc</string>
     <key>CFBundleName</key>
-    <string>ResistineCLI</string>
+    <string>Phoenix VPN</string>
+    <key>CFBundleDisplayName</key>
+    <string>Phoenix VPN</string>
     <key>CFBundleExecutable</key>
     <string>resistine-vpn-cli</string>
     <key>CFBundleVersion</key>
@@ -401,7 +404,9 @@ if [ -d "$CLAMAV_ARTIFACTS_DIR/binaries" ]; then
     <key>CFBundleIdentifier</key>
     <string>com.resistine.desktop.clamonacc</string>
     <key>CFBundleName</key>
-    <string>ResistineClamAV</string>
+    <string>Phoenix Antivirus</string>
+    <key>CFBundleDisplayName</key>
+    <string>Phoenix Antivirus</string>
     <key>CFBundleExecutable</key>
     <string>clamonacc</string>
     <key>CFBundleVersion</key>
@@ -915,8 +920,8 @@ if [ -d "$PYTHON_APP/Contents/Frameworks/Sparkle.framework" ]; then
     echo "    Sparkle.framework signed"
 fi
 
-# 5f: Sign the outer Resistine.app bundle
-echo "  - Signing main Resistine.app bundle..."
+# 5f: Sign the outer Phoenix.app bundle
+echo "  - Signing main Phoenix.app bundle..."
 codesign --force --sign "$SIGN_IDENTITY" \
     --options runtime \
     $ENTITLEMENTS_FLAG \
@@ -925,7 +930,7 @@ codesign --force --sign "$SIGN_IDENTITY" \
     echo "  Main app signing failed"
     exit 1
 }
-echo "    Resistine.app signed"
+echo "    Phoenix.app signed"
 
 # Verify all signatures
 echo ""
@@ -949,7 +954,7 @@ if [ "$CLAMAV_AVAILABLE" = true ] && [ -d "$PYTHON_APP/Contents/Helpers/Resistin
 fi
 
 codesign --verify --verbose=2 "$PYTHON_APP" 2>&1 && \
-    echo "    Resistine.app: valid" || { echo "    Resistine.app: INVALID"; VERIFY_FAILED=true; }
+    echo "    Phoenix.app: valid" || { echo "    Phoenix.app: INVALID"; VERIFY_FAILED=true; }
 
 if [ "$VERIFY_FAILED" = true ]; then
     echo ""
@@ -1023,13 +1028,17 @@ cat > "$PKG_SCRIPTS_DIR/preinstall" << 'PREEOF'
 # screen. Launching from this script would run the app as root.
 
 # Quit the app gracefully, then force-kill any stragglers, before removing it.
-osascript -e 'quit app "Resistine"' 2>/dev/null || true
-pkill -x Resistine 2>/dev/null || true
+# Builds before the rename installed it as Resistine.app; remove that too.
+for name in Phoenix Resistine; do
+    osascript -e "quit app \"$name\"" 2>/dev/null || true
+    pkill -x "$name" 2>/dev/null || true
+done
 sleep 1
 
-if [ -d "/Applications/Resistine.app" ]; then
-    rm -rf "/Applications/Resistine.app" 2>/dev/null || true
-fi
+for app in /Applications/Phoenix.app /Applications/Resistine.app; do
+    [ -d "$app" ] && rm -rf "$app" 2>/dev/null
+done
+true
 exit 0
 PREEOF
 chmod +x "$PKG_SCRIPTS_DIR/preinstall"
@@ -1037,7 +1046,7 @@ chmod +x "$PKG_SCRIPTS_DIR/preinstall"
 cat > "$PKG_SCRIPTS_DIR/postinstall" << 'POSTEOF'
 #!/bin/bash
 # Register with LaunchServices so Spotlight / Finder recognise the app
-/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -f "/Applications/Resistine.app" 2>/dev/null || true
+/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -f "/Applications/Phoenix.app" 2>/dev/null || true
 
 # NOTE: System Extensions (.systemextension) are NOT managed by pluginkit.
 # They are activated via OSSystemExtensionRequest from the running app.
@@ -1086,7 +1095,7 @@ pkgbuild \
 cat > "$DIST_DIR/distribution.xml" << DISTEOF
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
-    <title>$APP_NAME</title>
+    <title>$DISPLAY_NAME</title>
     <organization>com.resistine</organization>
     <domains enable_localSystem="true"/>
     <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
@@ -1120,7 +1129,7 @@ fi
 
 # Build the final product archive
 echo "  - Building product archive..."
-PKG_PATH="$DIST_DIR/$APP_NAME-Installer.pkg"
+PKG_PATH="$DIST_DIR/$DISPLAY_NAME-Installer.pkg"
 
 if [ -n "$INSTALLER_NAME" ]; then
     productbuild \
@@ -1164,7 +1173,7 @@ if ! command -v create-dmg &> /dev/null; then
     fi
 fi
 
-rm -f "$DIST_DIR/$APP_NAME-Installer.dmg"
+rm -f "$DIST_DIR/$DISPLAY_NAME-Installer.dmg"
 
 BACKGROUND_FLAG=""
 if [ -f "$PYTHON_UI_PATH/resources/installer-background.png" ]; then
@@ -1172,12 +1181,12 @@ if [ -f "$PYTHON_UI_PATH/resources/installer-background.png" ]; then
 fi
 
 ICON_FLAG=""
-if [ -f "$PYTHON_UI_PATH/resources/icons/ResistineShield.png" ]; then
-    ICON_FLAG="--volicon $PYTHON_UI_PATH/resources/icons/ResistineShield.png"
+if [ -f "$PYTHON_UI_PATH/resources/icons/PhoenixMark.png" ]; then
+    ICON_FLAG="--volicon $PYTHON_UI_PATH/resources/icons/PhoenixMark.png"
 fi
 
 create-dmg \
-  --volname "$APP_NAME Installer" \
+  --volname "$DISPLAY_NAME Installer" \
   $ICON_FLAG \
   --window-pos 200 120 \
   --window-size 800 400 \
@@ -1186,22 +1195,22 @@ create-dmg \
   --hide-extension "$APP_NAME.app" \
   --app-drop-link 600 185 \
   $BACKGROUND_FLAG \
-  "$DIST_DIR/$APP_NAME-Installer.dmg" \
+  "$DIST_DIR/$DISPLAY_NAME-Installer.dmg" \
   "$PYTHON_APP" 2>&1 || {
     echo "  DMG creation had warnings but may have succeeded"
   }
 
-if [ ! -f "$DIST_DIR/$APP_NAME-Installer.dmg" ]; then
+if [ ! -f "$DIST_DIR/$DISPLAY_NAME-Installer.dmg" ]; then
     echo "  Error: DMG creation failed"
     exit 1
 fi
 
-DMG_SIZE=$(du -h "$DIST_DIR/$APP_NAME-Installer.dmg" | cut -f1)
-echo "  DMG created: $DIST_DIR/$APP_NAME-Installer.dmg ($DMG_SIZE)"
+DMG_SIZE=$(du -h "$DIST_DIR/$DISPLAY_NAME-Installer.dmg" | cut -f1)
+echo "  DMG created: $DIST_DIR/$DISPLAY_NAME-Installer.dmg ($DMG_SIZE)"
 
 # Sign the DMG
 echo "  - Signing DMG..."
-codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DIST_DIR/$APP_NAME-Installer.dmg" || {
+codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DIST_DIR/$DISPLAY_NAME-Installer.dmg" || {
     echo "  DMG signing failed"
     exit 1
 }
@@ -1251,18 +1260,18 @@ if [ "$SKIP_NOTARIZE" = true ]; then
     echo "  Skipping notarization (no credentials configured)"
     echo ""
     echo "  To notarize manually later:"
-    echo "    xcrun notarytool submit $DIST_DIR/$APP_NAME-Installer.pkg \\"
+    echo "    xcrun notarytool submit $DIST_DIR/$DISPLAY_NAME-Installer.pkg \\"
     echo "      --keychain-profile \"resistine-notarize\" --wait"
-    echo "    xcrun stapler staple $DIST_DIR/$APP_NAME-Installer.pkg"
+    echo "    xcrun stapler staple $DIST_DIR/$DISPLAY_NAME-Installer.pkg"
 else
     # Notarize PKG (primary)
-    notarize_and_staple "$DIST_DIR/$APP_NAME-Installer.pkg" "PKG" || {
+    notarize_and_staple "$DIST_DIR/$DISPLAY_NAME-Installer.pkg" "PKG" || {
         echo "  Fix the issues above and re-run this script."
         exit 1
     }
 
     # Notarize DMG (secondary)
-    notarize_and_staple "$DIST_DIR/$APP_NAME-Installer.dmg" "DMG" || {
+    notarize_and_staple "$DIST_DIR/$DISPLAY_NAME-Installer.dmg" "DMG" || {
         echo "  Warning: DMG notarization failed (PKG is still valid)"
     }
 fi
@@ -1276,6 +1285,7 @@ rm -f /tmp/ne-distribution.entitlements.plist /tmp/cli-distribution.entitlements
 echo ""
 echo "Step 8: Installing to /Applications..."
 
+rm -rf "/Applications/Resistine.app" 2>/dev/null || true  # pre-rename bundle
 if [ -d "/Applications/$APP_NAME.app" ]; then
     echo "  - Removing old /Applications/$APP_NAME.app..."
     rm -rf "/Applications/$APP_NAME.app" || {
@@ -1311,8 +1321,8 @@ echo "==================================="
 echo "  Distribution Build Complete!"
 echo "==================================="
 echo ""
-echo "  PKG Installer: $DIST_DIR/$APP_NAME-Installer.pkg  (recommended)"
-echo "  DMG Installer: $DIST_DIR/$APP_NAME-Installer.dmg  (drag-and-drop alternative)"
+echo "  PKG Installer: $DIST_DIR/$DISPLAY_NAME-Installer.pkg  (recommended)"
+echo "  DMG Installer: $DIST_DIR/$DISPLAY_NAME-Installer.dmg  (drag-and-drop alternative)"
 echo "  App Bundle:    $PYTHON_APP"
 echo ""
 if [ "$SKIP_NOTARIZE" = true ]; then

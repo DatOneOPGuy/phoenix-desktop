@@ -38,15 +38,15 @@ with open('packaging/Resistine.spec', 'r') as f:
         print("0.0.0")
 EOF
 )
-echo "Building Resistine version: ${VERSION}"
+echo "Building Phoenix version: ${VERSION}"
 
 # Run PyInstaller build
 echo "Running PyInstaller..."
 pyinstaller --clean -y packaging/Resistine.spec
 
 # Verify build output
-if [ ! -d "dist/Resistine" ]; then
-	echo "Error: PyInstaller build failed. dist/Resistine directory not found."
+if [ ! -d "dist/Phoenix" ]; then
+	echo "Error: PyInstaller build failed. dist/Phoenix directory not found."
 	exit 1
 fi
 
@@ -55,27 +55,27 @@ STAGING_DIR="dist/deb_staging"
 echo "Preparing staging directory at ${STAGING_DIR}..."
 rm -rf "$STAGING_DIR"
 mkdir -p "$STAGING_DIR/DEBIAN"
-mkdir -p "$STAGING_DIR/opt/resistine"
+mkdir -p "$STAGING_DIR/opt/phoenix"
 mkdir -p "$STAGING_DIR/usr/bin"
 mkdir -p "$STAGING_DIR/usr/share/applications"
 mkdir -p "$STAGING_DIR/usr/share/pixmaps"
 
 # Copy PyInstaller files
 echo "Copying application files..."
-cp -r dist/Resistine/* "$STAGING_DIR/opt/resistine/"
+cp -r dist/Phoenix/* "$STAGING_DIR/opt/phoenix/"
 
 # Create launcher script
 echo "Creating launcher script..."
-cat <<'EOF' >"$STAGING_DIR/usr/bin/resistine"
+cat <<'EOF' >"$STAGING_DIR/usr/bin/phoenix"
 #!/bin/sh
-exec /opt/resistine/Resistine "$@"
+exec /opt/phoenix/Phoenix "$@"
 EOF
-chmod 755 "$STAGING_DIR/usr/bin/resistine"
+chmod 755 "$STAGING_DIR/usr/bin/phoenix"
 
 # Copy desktop and icon files
 echo "Copying desktop entry and icons..."
-cp packaging/linux/resistine.desktop "$STAGING_DIR/usr/share/applications/"
-cp resources/icons/app_icon.png "$STAGING_DIR/usr/share/pixmaps/resistine.png"
+cp packaging/linux/phoenix.desktop "$STAGING_DIR/usr/share/applications/"
+cp resources/icons/app_icon.png "$STAGING_DIR/usr/share/pixmaps/phoenix.png"
 
 # Process control file
 echo "Generating DEBIAN/control file..."
@@ -89,7 +89,7 @@ chmod 755 "$STAGING_DIR/DEBIAN/postinst"
 chmod 755 "$STAGING_DIR/DEBIAN/postrm"
 
 # Build Debian package
-DEB_FILE="dist/resistine_${VERSION}_amd64.deb"
+DEB_FILE="dist/phoenix_${VERSION}_amd64.deb"
 echo "Building Debian package: ${DEB_FILE}..."
 dpkg-deb --root-owner-group --build "$STAGING_DIR" "$DEB_FILE"
 

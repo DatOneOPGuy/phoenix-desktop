@@ -73,6 +73,7 @@ connect = None
 disconnect = None
 is_extension_enabled = None
 vpn_helper = None
+vpn_unavailable_reason = None
 
 try:
     if IS_WINDOWS:
@@ -106,6 +107,7 @@ try:
             start_vpn,
             stop_vpn,
             vpn_helper,
+            vpn_unavailable_reason,
         )
 except Exception as _imp_err:  # pragma: no cover - depends on host OS
     logger.warning(get_text("vpn.vpn_backend_import_failed_on", _PLATFORM=_PLATFORM, _imp_err=_imp_err))
@@ -155,6 +157,16 @@ try:
     _config_manager.migrate_legacy_config()
 except Exception as e:
     logger.warning(get_text("vpn.legacy_vpn_config_migration_failed", e=e))
+
+
+def _vpn_unavailable() -> str | None:
+    """macOS: why this build/install can't run the VPN at all, or None."""
+    if not IS_MACOS or vpn_unavailable_reason is None:
+        return None
+    try:
+        return vpn_unavailable_reason()
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _safe_extension_enabled() -> bool:
@@ -546,6 +558,7 @@ class Plugin(BasePlugin):
             selected_conf_file = self.get_selected_conf_file_name()
 
         # On macOS, detect if the extension was disabled after onboarding.
+        unavailable = _vpn_unavailable()
         extension_disabled = IS_MACOS and not _safe_extension_enabled()
         if extension_disabled and my_vpn_status == "Running":
             my_vpn_status = "Stopped"
@@ -555,7 +568,14 @@ class Plugin(BasePlugin):
         self._last_polled_state = my_vpn_status
 
         # ── Status copy + colours (mirror the original (light, dark) pairs) ──
-        if extension_disabled:
+        if unavailable:
+            # macOS can't run the VPN (e.g. unsigned build): say why, stay off.
+            status_text = "Not available"
+            status_color = _pick("#C5221F", "#FF4040")
+            sub_text = unavailable
+            card_bg = _pick("#FDEDEC", "#3A1A1A")
+            is_enabled = False
+        elif extension_disabled:
             status_text = get_text("vpn.extension_disabled")
             status_color = _pick("#C5221F", "#FF4040")
             try:
@@ -1054,6 +1074,13 @@ class Plugin(BasePlugin):
         config_path = os.path.join(wireguard_folder, f"{tunnel_name}.conf")
 
         if IS_MACOS:
+            unavailable = _vpn_unavailable()
+            if unavailable:
+                logger.error(f"VPN unavailable: {unavailable}")
+                self.app.after(0, self.app.show_notification, unavailable, "error")
+                my_vpn_status = "Stopped"
+                active_client_name = None
+                return
             if not _safe_extension_enabled():
                 logger.error("Network extension is disabled in System Settings")
                 try:

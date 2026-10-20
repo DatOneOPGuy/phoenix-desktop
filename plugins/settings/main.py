@@ -1,9 +1,10 @@
 ## @file plugins/settings/main.py
 ## @namespace settings_plugin
-"""Settings plugin (PyQt6) — faithful port of the CTk layout.
+"""Settings plugin (PyQt6).
 
-Five full-width cards, each a "section title + divider" header over its content,
-in the original order: Profile, API key, Appearance, Software Updates, Uninstall.
+A flat page (gui/page_kit.py): a "Settings" header naming the signed-in
+account, then sections — Account, AI assistant, Appearance, Notifications,
+Updates — and a last section with the Log in / Log out and Uninstall actions as menu rows.
 
 Author: Peres J. and the Resistine Team
 Copyright (c) Resistine 2025
@@ -14,12 +15,9 @@ import glob
 import os
 import sys
 
-from PyQt6.QtCore import QSize, Qt
-from PyQt6.QtGui import QIcon
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QCheckBox,
     QComboBox,
-    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -29,15 +27,23 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from gui import theme
-from gui.qt_widgets import scroll_page
+from gui.page_kit import (
+    KVList,
+    MenuRow,
+    Page,
+    PageHeader,
+    SettingRow,
+    muted,
+    section_heading,
+)
+from gui.toggle import ToggleSwitch
 from plugins.base_plugin import BasePlugin
-from utils import settings
+from utils import chat_config, settings
 from utils.i18n import get_text
 from utils.logger import logger
 
 _DIR = os.path.dirname(os.path.realpath(__file__))
-_DEFAULT_BASE = "https://dashboard.resisti.net:8002/v1"
+_DEFAULT_MATRIX_BOT = "@secagent:phoenix.exposed"
 
 
 def _t(key, fallback):
@@ -46,6 +52,26 @@ def _t(key, fallback):
         return val if val and val != key else fallback
     except Exception:
         return fallback
+
+
+def _label(key, fallback):
+    """A translated row title, minus the trailing colon some strings carry."""
+    return _t(key, fallback).rstrip(": ")
+
+
+class _StatusLine(QLabel):
+    """A small muted line for transient status text; hidden while empty so
+    it leaves no gap."""
+
+    def __init__(self):
+        super().__init__("")
+        self.setObjectName("Hint")
+        self.setWordWrap(True)
+        self.hide()
+
+    def setText(self, text):  # noqa: N802 - Qt override
+        super().setText(text)
+        self.setVisible(bool(text))
 
 
 class _NoScrollComboBox(QComboBox):
@@ -70,7 +96,7 @@ class Plugin(BasePlugin):
         super().__init__(
             id="010", version="2025.01.01", order=1020, name="Settings",
             status=None,
-            description=get_text("settings.this_plugin_allows_you_to"),
+            description="Your account, appearance and updates.",
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Settings", "ES": "Configuracion",
                           "FR": "Paramètres"},
@@ -80,83 +106,82 @@ class Plugin(BasePlugin):
         )
         self.app = app
 
-    # ---- A card with a section-title + divider header ---------------------
-    def _card(self, title: str) -> tuple[QFrame, QVBoxLayout]:
-        card = QFrame()
-        card.setObjectName("Surface")
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(16, 12, 16, 16)
-        lay.setSpacing(8)
-        lbl = QLabel(title)
-        lbl.setStyleSheet("font-size: 16px; font-weight: 700;")
-        lay.addWidget(lbl)
-        div = QFrame()
-        div.setFixedHeight(1)
-        div.setObjectName("Divider")
-        lay.addWidget(div)
-        lay.addSpacing(4)
-        return card, lay
-
-    def _muted(self, text: str) -> QLabel:
-        lbl = QLabel(text)
-        lbl.setWordWrap(True)
-        lbl.setStyleSheet(f"color: {theme.color('text_secondary')};")
-        return lbl
+    # ---- A titled page section ---------------------------------------------
+    @staticmethod
+    def _section(title: str) -> tuple[QWidget, QVBoxLayout]:
+        """A section: breathing room, a small uppercase heading, then body."""
+        box = QWidget()
+        box.setObjectName("Transparent")
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 28, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(section_heading(title))
+        lay.addSpacing(8)
+        return box, lay
 
     def create_main_screen(self):
-        inner = QWidget()
-        col = QVBoxLayout(inner)
-        col.setContentsMargins(20, 16, 20, 20)
-        col.setSpacing(12)
-
-        col.addWidget(self._profile_card())
-        col.addWidget(self._api_card())
-        col.addWidget(self._appearance_card())
-        col.addWidget(self._language_card())
-        col.addWidget(self._updates_card())
-        col.addWidget(self._uninstall_card())
-        col.addStretch(1)
-        return scroll_page(inner)
-
-    # ---- Profile ----------------------------------------------------------
-    def _profile_card(self) -> QWidget:
-        card, lay = self._card(get_text("settings.profile"))
-        # Button text/color/action mirrors auth state: logged in -> Log Out
-        # (red, destructive); logged out -> Log In (primary blue, action).
+        page = Page()
+        user_id = settings.get("auth", "user_id", None)
         logged_in = settings.get("auth", "logged_in", False)
+        page.add(PageHeader(
+            "Settings",
+            f"Signed in as {user_id}" if user_id else
+            ("Signed in" if logged_in else "Not signed in")))
+        page.add(self._profile_card())
+        page.add(self._api_card())
+        page.add(self._appearance_card())
+        page.add(self._language_card())
+        page.add(self._notifications_card())
+        page.add(self._updates_card())
+        page.add(self._uninstall_card())
+        page.stretch()
+        return page.widget
+
+    # ---- Account ----------------------------------------------------------
+    def _profile_card(self) -> QWidget:
+        box, lay = self._section("Account")
         email = settings.get("auth", "email", None)
-        lay.addWidget(self._muted(
-            get_text("settings.email_label", email=email) if email
-            else get_text("settings.not_signed_in")))
-
-        if logged_in:
-            self.logout_button = QPushButton(get_text("settings.log_out"))
-            self.logout_button.setStyleSheet(
-                "background-color: #DC3545; color: white; border: none;"
-                "border-radius: 8px; padding: 8px 16px; font-weight: 600;")
-            # Sign-out icon only shown when logged in. The button is red with
-            # white text in BOTH themes, so the icon must always be the light
-            # glyph (signout_dark.png) to match that white text — picking by
-            # app theme gave a dark, low-contrast glyph in light mode and never
-            # updated on a theme toggle.
-            p = os.path.join(_DIR, "signout_dark.png")
-            if os.path.isfile(p):
-                self.logout_button.setIcon(QIcon(p))
-                self.logout_button.setIconSize(QSize(18, 18))
-            self.logout_button.clicked.connect(self._handle_logout)
+        user_id = settings.get("auth", "user_id", None)
+        rows = []
+        if user_id:
+            rows.append(("Phoenix account", user_id))
+        if email:
+            rows.append(("Email", email))
+        if rows:
+            lay.addWidget(KVList(rows))
         else:
-            self.logout_button = QPushButton(get_text("settings.log_in"))
-            self.logout_button.setStyleSheet(
-                "background-color: #0D5394; color: white; border: none;"
-                "border-radius: 8px; padding: 8px 16px; font-weight: 600;")
-            self.logout_button.clicked.connect(self._handle_login)
-        self.logout_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        lay.addWidget(self.logout_button, 0, Qt.AlignmentFlag.AlignLeft)
-        return card
+            lay.addWidget(muted("Not signed in"))
+        return box
 
-    # ---- API key ----------------------------------------------------------
+    # ---- AI assistant -----------------------------------------------------
     def _api_card(self) -> QWidget:
-        card, lay = self._card(_t("settings.apikey.label", "OpenAI API Key"))
+        box, lay = self._section("AI assistant")
+
+        # Chat transport: the HTTPS OpenAI-compatible API, or an end-to-end
+        # encrypted Matrix DM with the Phoenix assistant bot.
+        self.transport_combo = _NoScrollComboBox()
+        self.transport_combo.addItem("OpenAI API (HTTPS)", "openai")
+        self.transport_combo.addItem("Matrix (end-to-end encrypted)", "matrix")
+        current = settings.get("chat", "transport") or "openai"
+        self.transport_combo.setCurrentIndex(
+            max(0, self.transport_combo.findData(current)))
+        lay.addWidget(SettingRow(
+            _label("settings.chat.transport", "Chat transport"), "",
+            self.transport_combo, stacked=True))
+
+        # The transport-specific rows are shown/hidden as a whole by
+        # _sync_transport_fields (the *_label attributes are those rows).
+        self.matrix_bot_entry = QLineEdit()
+        self.matrix_bot_entry.setPlaceholderText(_DEFAULT_MATRIX_BOT)
+        self.matrix_bot_entry.setText(
+            settings.get("chat", "matrix_bot") or _DEFAULT_MATRIX_BOT)
+        self.matrix_bot_label = SettingRow(
+            _label("settings.chat.matrix_bot", "Assistant Matrix ID"), "",
+            self.matrix_bot_entry, stacked=True)
+        lay.addWidget(self.matrix_bot_label)
+        self.matrix_hint = self.matrix_bot_label.hint
+        self.transport_combo.currentIndexChanged.connect(
+            self._sync_transport_fields)
 
         self.api_key_entry = QLineEdit()
         self.api_key_entry.setEchoMode(QLineEdit.EchoMode.Password)
@@ -165,25 +190,35 @@ class Plugin(BasePlugin):
         existing_key = settings.get_secret("chat", "openai_api_key")
         if existing_key:
             self.api_key_entry.setText(existing_key)
-        lay.addWidget(self.api_key_entry)
+        self.api_key_row = SettingRow(
+            _label("settings.apikey.label", "OpenAI API Key"), "",
+            self.api_key_entry, stacked=True)
+        lay.addWidget(self.api_key_row)
 
-        lay.addWidget(self._muted(_t("settings.apibase.label", "API Base URL")))
         self.api_base_entry = QLineEdit()
         self.api_base_entry.setPlaceholderText(
             _t("settings.apibase.placeholder", "API base URL"))
-        self.api_base_entry.setText(
-            settings.get("chat", "openai_base_url") or _DEFAULT_BASE)
-        lay.addWidget(self.api_base_entry)
+        self.api_base_entry.setText(chat_config.base_url())
+        self.api_base_label = SettingRow(
+            _label("settings.apibase.label", "API Base URL"), "",
+            self.api_base_entry, stacked=True)
+        lay.addWidget(self.api_base_label)
 
-        self.disable_animation_checkbox = QCheckBox(
-            _t("settings.chat.disable_animation", "Disable typing animation"))
+        self.disable_animation_checkbox = ToggleSwitch()
         self.disable_animation_checkbox.setChecked(
             bool(settings.get("chat", "disable_animation", False)))
         self.disable_animation_checkbox.toggled.connect(
             self.save_animation_setting)
-        lay.addWidget(self.disable_animation_checkbox)
+        lay.addWidget(SettingRow(
+            _label("settings.chat.disable_animation", "Disable typing animation"),
+            "Show replies all at once instead of word by word",
+            self.disable_animation_checkbox))
+
+        self._sync_transport_fields()
 
         row = QHBoxLayout()
+        row.setContentsMargins(0, 8, 0, 0)
+        row.setSpacing(12)
         save = QPushButton(_t("settings.apikey.save", "Save"))
         save.setCursor(Qt.CursorShape.PointingHandCursor)
         save.clicked.connect(self.save_api_key)
@@ -191,35 +226,30 @@ class Plugin(BasePlugin):
         self.status_label = QLabel("")
         row.addWidget(self.status_label, 1)
         lay.addLayout(row)
-        return card
+        return box
 
     # ---- Appearance -------------------------------------------------------
     def _appearance_card(self) -> QWidget:
-        card, lay = self._card(get_text("settings.appearance"))
-        lay.addWidget(self._muted(get_text("settings.mode")))
+        box, lay = self._section("Appearance")
         self.appearance_combo = _NoScrollComboBox()
-        # Display localized labels; store the canonical English mode as item
-        # data — settings persistence and set_appearance_mode() expect
-        # "System"/"Light"/"Dark" regardless of UI language.
-        for mode, key in (("System", "settings.appearance_mode.system"),
-                          ("Light", "settings.appearance_mode.light"),
-                          ("Dark", "settings.appearance_mode.dark")):
-            self.appearance_combo.addItem(_t(key, mode), mode)
-        idx = self.appearance_combo.findData(
+        self.appearance_combo.addItems(["System", "Light", "Dark"])
+        self.appearance_combo.setCurrentText(
             settings.get("ui", "appearance_mode", "System"))
-        if idx >= 0:
-            self.appearance_combo.setCurrentIndex(idx)
-        self.appearance_combo.currentIndexChanged.connect(
-            lambda i: self.change_appearance_mode(
-                self.appearance_combo.itemData(i)))
-        lay.addWidget(self.appearance_combo)
-        return card
+        self.appearance_combo.setMinimumWidth(160)
+        self.appearance_combo.currentTextChanged.connect(
+            self.change_appearance_mode)
+        lay.addWidget(SettingRow(
+            "Mode", "System follows your computer's light/dark setting",
+            self.appearance_combo))
+        return box
 
-    # ---- Language ---------------------------------------------------------
+    # ---- Notifications ----------------------------------------------------
+
+    # ---- Language -----------------------------------------------------------
     def _language_card(self) -> QWidget:
         from utils import i18n
 
-        card, lay = self._card(_t("settings.language.label", "Language"))
+        box, lay = self._section(_t("settings.language.label", "Language"))
         self.language_combo = _NoScrollComboBox()
         # Store the language code on each item; display the native name.
         for code in sorted(i18n.get_available_languages()):
@@ -231,9 +261,9 @@ class Plugin(BasePlugin):
             self.language_combo.setCurrentIndex(idx)
         self.language_combo.currentIndexChanged.connect(self.change_language)
         lay.addWidget(self.language_combo)
-        self.language_status_label = self._muted("")
+        self.language_status_label = muted("")
         lay.addWidget(self.language_status_label)
-        return card
+        return box
 
     def change_language(self, index: int):
         from utils import i18n
@@ -274,38 +304,70 @@ class Plugin(BasePlugin):
             except Exception:
                 pass
 
+    def _notifications_card(self) -> QWidget:
+        box, lay = self._section("Notifications")
+        self.alert_notifications_switch = ToggleSwitch()
+        self.alert_notifications_switch.setChecked(
+            bool(settings.get("dashboard", "alert_notifications", True)))
+        self.alert_notifications_switch.toggled.connect(
+            lambda on: settings.set("dashboard", "alert_notifications", bool(on)))
+        lay.addWidget(SettingRow(
+            "Alert notifications",
+            "Show a desktop notification for new high and critical SIEM alerts",
+            self.alert_notifications_switch))
+        return box
+
     # ---- Software Updates -------------------------------------------------
     def _updates_card(self) -> QWidget:
-        card, lay = self._card(get_text("settings.software_updates"))
-        lay.addWidget(self._muted(get_text(
-            "settings.current_version", version=self._get_app_version())))
-        check = QPushButton(get_text("settings.check_for_updates"))
-        check.setCursor(Qt.CursorShape.PointingHandCursor)
-        check.clicked.connect(self._check_for_updates)
-        lay.addWidget(check, 0, Qt.AlignmentFlag.AlignLeft)
-        self.update_status_label = QLabel("")
+        box, lay = self._section("Updates")
+        check = MenuRow("refresh-cw", "Check for updates",
+                        f"Current version: {self._get_app_version()}",
+                        on_click=self._check_for_updates)
+        lay.addWidget(check)
+        self.update_status_label = _StatusLine()
         lay.addWidget(self.update_status_label)
-        return card
+        return box
 
-    # ---- Uninstall --------------------------------------------------------
+    # ---- Sign in/out + Uninstall ------------------------------------------
     def _uninstall_card(self) -> QWidget:
-        card, lay = self._card("Uninstall")
-        lay.addWidget(self._muted(
-            get_text("settings.permanently_remove_resistine_and_all")))
-        self.uninstall_button = QPushButton(get_text("settings.uninstall_resistine"))
-        self.uninstall_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.uninstall_button.setStyleSheet(
-            "background-color: #DC3545; color: white; border: none;"
-            "border-radius: 8px; padding: 8px 16px; font-weight: 600;")
-        self.uninstall_button.clicked.connect(self._handle_uninstall)
-        lay.addWidget(self.uninstall_button, 0, Qt.AlignmentFlag.AlignLeft)
-        self.uninstall_status_label = QLabel("")
+        box, lay = self._section("Account actions")
+        # The row mirrors auth state: logged in -> Log Out, logged out ->
+        # Log In.
+        if settings.get("auth", "logged_in", False):
+            self.logout_button = MenuRow(
+                "log-out", "Log Out",
+                "Sign out of your Phoenix account on this device",
+                on_click=self._handle_logout)
+        else:
+            self.logout_button = MenuRow(
+                "log-in", "Log In", "Sign in with your Phoenix account",
+                on_click=self._handle_login)
+        lay.addWidget(self.logout_button)
+        self.uninstall_button = MenuRow(
+            "trash", "Uninstall Phoenix",
+            "Permanently remove Phoenix and all associated data from this "
+            "computer", on_click=self._handle_uninstall, danger=True)
+        lay.addWidget(self.uninstall_button)
+        self.uninstall_status_label = _StatusLine()
         lay.addWidget(self.uninstall_status_label)
-        return card
+        return box
 
     # ===================================================================
     #  Actions
     # ===================================================================
+    def _safe_set_text(self, label, text):
+        """Set a status label's text, tolerating a torn-down widget.
+
+        These are called from deferred after() callbacks that clear a status
+        line seconds later; by then the Settings screen may have been rebuilt
+        (theme toggle) or navigated away, leaving a live Python wrapper around
+        a deleted C++ QLabel — setText then raises RuntimeError.
+        """
+        try:
+            label.setText(text)
+        except RuntimeError:
+            pass
+
     def save_animation_setting(self):
         settings.set("chat", "disable_animation",
                      self.disable_animation_checkbox.isChecked())
@@ -319,16 +381,45 @@ class Plugin(BasePlugin):
                     pass
                 break
 
+    def _sync_transport_fields(self, *_):
+        """Show the Matrix fields only for the Matrix transport."""
+        matrix = self.transport_combo.currentData() == "matrix"
+        for w in (self.api_key_row, self.api_key_entry, self.api_base_label,
+                  self.api_base_entry):
+            w.setVisible(not matrix)
+        for w in (self.matrix_bot_label, self.matrix_bot_entry, self.matrix_hint):
+            w.setVisible(matrix)
+        if matrix:
+            try:
+                from plugins.login import oidc
+                signed_in = oidc.has_session()
+            except Exception:
+                signed_in = False
+            self.matrix_hint.setText(
+                "Uses your Phoenix account; messages are end-to-end encrypted."
+                if signed_in else
+                "Sign in with your Phoenix account (Log In below) to use Matrix chat.")
+
     def save_api_key(self):
         api_key = self.api_key_entry.text().strip()
         api_base = self.api_base_entry.text().strip()
-        if not api_key and not api_base:
+        transport = self.transport_combo.currentData() or "openai"
+        bot = self.matrix_bot_entry.text().strip()
+        if bot and not (bot.startswith("@") and ":" in bot):
+            self.status_label.setText("Matrix ID must look like @name:server")
+            self.status_label.setStyleSheet("color: #DC2626;")
             return
-        ok_key = (settings.set_secret("chat", "openai_api_key", api_key)
-                  if api_key else True)
-        ok_base = settings.set("chat", "openai_base_url",
-                               api_base if api_base else None)
-        if ok_key and ok_base:
+        ok_transport = settings.set("chat", "transport", transport)
+        ok_bot = settings.set("chat", "matrix_bot",
+                              bot if bot and bot != _DEFAULT_MATRIX_BOT else None)
+        if transport == "openai" and not api_key and not api_base:
+            ok_key = ok_base = True
+        else:
+            ok_key = (settings.set_secret("chat", "openai_api_key", api_key)
+                      if api_key else True)
+            ok_base = settings.set("chat", "openai_base_url",
+                                   api_base if api_base else None)
+        if ok_key and ok_base and ok_transport and ok_bot:
             self.status_label.setText(
                 _t("settings.apikey.saved_success", "Saved"))
             self.status_label.setStyleSheet("color: #16A34A;")
@@ -337,7 +428,8 @@ class Plugin(BasePlugin):
                         plugin, "reinitialize_client"):
                     plugin.reinitialize_client()
                     break
-            self.app.after(2500, lambda: self.status_label.setText(""))
+            self.app.after(
+                2500, lambda: self._safe_set_text(self.status_label, ""))
         else:
             self.status_label.setText(
                 _t("settings.apikey.saved_error", "Save failed"))
@@ -363,18 +455,21 @@ class Plugin(BasePlugin):
             from utils import updates
             if not updates.is_available():
                 self.update_status_label.setText(
-                    get_text("settings.updates_not_available_in_this"))
+                    "Updates not available in this build")
                 self.app.after(
-                    5000, lambda: self.update_status_label.setText(""))
+                    5000,
+                    lambda: self._safe_set_text(self.update_status_label, ""))
                 return
-            self.update_status_label.setText(get_text("settings.checking_for_updates"))
+            self.update_status_label.setText("Checking for updates…")
             result = updates.check_for_updates()
             if result == "error":
-                self.update_status_label.setText(get_text("settings.update_check_failed"))
-            self.app.after(4000, lambda: self.update_status_label.setText(""))
+                self.update_status_label.setText("Update check failed")
+            self.app.after(
+                4000,
+                lambda: self._safe_set_text(self.update_status_label, ""))
         except Exception as e:
             logger.error(f"Update check error: {e}")
-            self.update_status_label.setText(get_text("settings.error_e", e=e))
+            self.update_status_label.setText(f"Error: {e}")
 
     def _get_app_version(self):
         try:
@@ -399,13 +494,15 @@ class Plugin(BasePlugin):
 
     def _handle_uninstall(self):
         confirmed = QMessageBox.question(
-            self.app, get_text("settings.uninstall_resistine"),
-            get_text("settings.are_you_sure_you_want"),
+            self.app, "Uninstall Phoenix",
+            "Are you sure you want to completely uninstall Phoenix?\n\n"
+            "This will remove all VPN configurations, application data, and the "
+            "application itself.\n\nThis action cannot be undone.",
         ) == QMessageBox.StandardButton.Yes
         if not confirmed:
             return
         self.uninstall_button.setEnabled(False)
-        self.uninstall_status_label.setText(get_text("settings.uninstalling"))
+        self.uninstall_status_label.setText("Uninstalling…")
         try:
             from utils import uninstall
 
@@ -415,7 +512,7 @@ class Plugin(BasePlugin):
             success, message = uninstall.run_uninstall(
                 self.app, progress_callback=_progress)
             if success:
-                self.uninstall_status_label.setText(get_text("settings.uninstalled_closing"))
+                self.uninstall_status_label.setText("Uninstalled. Closing…")
                 if sys.platform == "darwin":
                     # macOS: deferred hard-exit so teardown finishes flushing
                     # (the spawned uninstaller outlives us).
@@ -438,7 +535,7 @@ class Plugin(BasePlugin):
         except Exception as e:
             logger.error(f"Uninstall error: {e}")
             self.uninstall_button.setEnabled(True)
-            self.uninstall_status_label.setText(get_text("settings.error_e", e=e))
+            self.uninstall_status_label.setText(f"Error: {e}")
 
     def _login_plugin_installed(self) -> bool:
         """True if the Login plugin (id 007) is installed."""
@@ -455,24 +552,28 @@ class Plugin(BasePlugin):
         # broken bootstrap path.
         if not self._login_plugin_installed():
             self.app.show_notification(
-                get_text("settings.please_install_the_login_plugin"),
+                "Please install the Login plugin from the Store first.",
                 type="warning",
             )
             return
         confirmed = QMessageBox.question(
-            self.app, get_text("settings.log_out"),
-            get_text("settings.log_out_confirm"),
+            self.app, "Log Out",
+            "Are you sure you want to log out?\n\nThis will sign you out and "
+            "remove your VPN configurations, security agent enrollment, chat "
+            "history, and account data from this device.\n\nAn administrator "
+            "password may be required to fully uninstall the Wazuh agent.",
         ) == QMessageBox.StandardButton.Yes
         if not confirmed:
             return
         self._disconnect_vpn()
         self._remove_wazuh_agent()
+        self._revoke_session()
         self._clear_user_data()
         try:
             self.app.show_login()
         except Exception as e:
             logger.error(f"Failed to show login screen: {e}")
-            self.app.show_notification(get_text("settings.logout_failed_e", e=e), type="error")
+            self.app.show_notification(f"Logout failed: {e}", type="error")
 
     def _handle_login(self):
         """Bring up the full-screen login. No data is cleared — auth namespace
@@ -482,7 +583,7 @@ class Plugin(BasePlugin):
         """
         if not self._login_plugin_installed():
             self.app.show_notification(
-                get_text("settings.please_install_the_login_plugin"),
+                "Please install the Login plugin from the Store first.",
                 type="warning",
             )
             return
@@ -491,7 +592,7 @@ class Plugin(BasePlugin):
         except Exception as e:
             logger.error(f"Failed to show login screen: {e}")
             self.app.show_notification(
-                get_text("settings.could_not_open_sign_in", e=e), type="error")
+                f"Could not open sign-in: {e}", type="error")
 
     # ===================================================================
     #  Logout cleanup helpers (framework-agnostic — kept from CTk version)
@@ -520,7 +621,7 @@ class Plugin(BasePlugin):
                 if path:
                     stop_vpn(path)
         except Exception as e:
-            logger.warning(get_text("settings.vpn_disconnect_on_logout_failed", e=e))
+            logger.warning(f"VPN disconnect on logout failed: {e}")
 
     def _remove_wazuh_agent(self):
         import platform as plat
@@ -535,9 +636,29 @@ class Plugin(BasePlugin):
             else:
                 return
             if not remove_agent(wipe_keys=True):
-                logger.warning(get_text("settings.wazuh_agent_removal_reported_failure"))
+                logger.warning("Wazuh agent removal reported failure")
         except Exception as e:
-            logger.warning(get_text("settings.wazuh_agent_removal_on_logout", e=e))
+            logger.warning(f"Wazuh agent removal on logout failed: {e}")
+
+    def _revoke_session(self):
+        # End the MAS session too, so the device disappears from the
+        # account's session list. Best effort: offline logout still works.
+        # First tell the Phoenix API this device signed out, which removes
+        # its VPN peer on the server; that call needs the still-valid token.
+        try:
+            # Stop the Matrix session (chat and SIEM alerts) before its token goes.
+            from plugins.chat import matrix_transport
+            matrix_transport.shutdown_service()
+        except Exception as e:
+            logger.warning(f"Matrix shutdown on logout failed: {e}")
+        try:
+            from plugins.login.oidc import has_session, revoke
+            if has_session():
+                from plugins.vpn.provisioning import release_device
+                release_device()
+            revoke()
+        except Exception as e:
+            logger.warning(f"Session revoke on logout failed: {e}")
 
     def _clear_user_data(self):
         import platform as plat
@@ -564,9 +685,9 @@ class Plugin(BasePlugin):
                 try:
                     os.remove(conf)
                 except OSError as e:
-                    logger.warning(get_text("settings.failed_to_remove_vpn_config", conf=conf, e=e))
+                    logger.warning(f"Failed to remove VPN config {conf}: {e}")
         except Exception as e:
-            logger.warning(get_text("settings.vpn_config_cleanup_failed_e", e=e))
+            logger.warning(f"VPN config cleanup failed: {e}")
         settings.clear_namespace("chat_history")
         settings.delete("chat", "openai_api_key")
         settings.delete("chat", "openai_base_url")

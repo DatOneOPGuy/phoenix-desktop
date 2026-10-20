@@ -1,5 +1,5 @@
 #ifndef AppName
-  #define AppName "Resistine"
+  #define AppName "Phoenix"
 #endif
 
 #ifndef AppVersion
@@ -7,20 +7,23 @@
 #endif
 
 #ifndef SourceDir
-  #define SourceDir "..\..\dist\Resistine"
+  #define SourceDir "..\..\dist\Phoenix"
 #endif
 
 #ifndef OutputDir
   #define OutputDir "..\..\dist\installers"
 #endif
 
+; AppId stays "ResistineDesktop" so upgrades replace the pre-rebrand install
+; in place. Folder, registry and service names below are kept for the same
+; reason; only what users see says Phoenix.
 #define AppId "ResistineDesktop"
 
 [Setup]
 AppId={#AppId}
 AppName={#AppName}
 AppVersion={#AppVersion}
-AppPublisher=Resistine
+AppPublisher=Phoenix
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 UsePreviousAppDir=yes
@@ -56,7 +59,7 @@ DisableDirPage=auto
 DisableReadyPage=yes
 DisableProgramGroupPage=yes
 SetupIconFile=..\..\resources\icons\icon.ico
-UninstallDisplayIcon={app}\Resistine.exe
+UninstallDisplayIcon={app}\Phoenix.exe
 SetupLogging=yes
 ; Show the GPL-2.0-or-later text on the install acceptance screen. Inno
 ; reads this at compile time and displays the contents as plain text in
@@ -74,7 +77,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop icon"; Flags: unchecked
-Name: "startup"; Description: "Start Resistine when I sign in"; Flags: unchecked
+Name: "startup"; Description: "Start Phoenix when I sign in"; Flags: unchecked
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
@@ -90,20 +93,29 @@ Source: "deps\python-3.13.13-amd64.exe"; DestDir: "{tmp}"; Flags: deleteafterins
 Source: "deps\wireguard-amd64.msi"; DestDir: "{tmp}"; Flags: deleteafterinstall nocompression; Check: NeedWireGuardInstall
 
 [Icons]
-Name: "{autoprograms}\{#AppName}\{#AppName}"; Filename: "{app}\Resistine.exe"
+Name: "{autoprograms}\{#AppName}\{#AppName}"; Filename: "{app}\Phoenix.exe"
 Name: "{autoprograms}\{#AppName}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\Resistine.exe"; Tasks: desktopicon
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\Phoenix.exe"; Tasks: desktopicon
 
 [Registry]
 Root: HKLM64; Subkey: "Software\Resistine"; ValueType: string; ValueName: "InstallDir"; ValueData: "{app}"; Flags: uninsdeletevalue uninsdeletekeyifempty
 Root: HKLM64; Subkey: "Software\Resistine"; ValueType: string; ValueName: "Version"; ValueData: "{#AppVersion}"; Flags: uninsdeletevalue
-Root: HKLM64; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Resistine"; ValueData: """{app}\Resistine.exe"""; Tasks: startup; Flags: uninsdeletevalue
+Root: HKLM64; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Phoenix"; ValueData: """{app}\Phoenix.exe"""; Tasks: startup; Flags: uninsdeletevalue
 
 [Run]
 ; No 'skipifsilent': WinSparkle runs this installer with /SILENT during an
 ; auto-update, and we still want the app relaunched afterward (otherwise the
 ; update applies but "nothing happens" — the app just stays closed).
-Filename: "{app}\Resistine.exe"; Description: "Launch {#AppName}"; Flags: nowait postinstall runasoriginaluser; Check: ShouldPerformInstallAction
+Filename: "{app}\Phoenix.exe"; Description: "Launch {#AppName}"; Flags: nowait postinstall runasoriginaluser; Check: ShouldPerformInstallAction
+
+[InstallDelete]
+; Shortcuts created by pre-rebrand installers (AppName was "Resistine").
+Type: files; Name: "{autoprograms}\Resistine\Resistine.lnk"
+Type: files; Name: "{autoprograms}\Resistine\Uninstall Resistine.lnk"
+Type: dirifempty; Name: "{autoprograms}\Resistine"
+Type: files; Name: "{autodesktop}\Resistine.lnk"
+; The app itself was Resistine.exe before the rename.
+Type: files; Name: "{app}\Resistine.exe"
 
 [UninstallDelete]
 ; Inno Setup only removes files recorded in its install manifest. Python
@@ -165,7 +177,7 @@ begin
   Result := True;
   if not IsAdminInstallMode then
   begin
-    MsgBox('This installer must be run as Administrator.', mbError, MB_OK);
+    SuppressibleMsgBox('This installer must be run as Administrator.', mbError, MB_OK, IDOK);
     Result := False;
   end;
 end;
@@ -235,9 +247,19 @@ begin
   Result := '"' + S + '"';
 end;
 
-function GetResistineUserDataDir: string;
+function GetLegacyUserDataDir: string;
 begin
   Result := ExpandConstant('{userappdata}\Resistine');
+end;
+
+{ The app keeps per-user data in %APPDATA%\Phoenix and moves a pre-rebrand
+  %APPDATA%\Resistine there on first start. Until then the legacy dir is the
+  live one. }
+function GetResistineUserDataDir: string;
+begin
+  Result := ExpandConstant('{userappdata}\Phoenix');
+  if (not DirExists(Result)) and DirExists(GetLegacyUserDataDir) then
+    Result := GetLegacyUserDataDir;
 end;
 
 function GetResistineCommonDataDir: string;
@@ -279,11 +301,6 @@ begin
     FileExists(ExpandConstant('{pf}\Python314\python.exe'));
 end;
 
-function IsGtkRuntimeInstalled: Boolean;
-begin
-  Result := FileExists('C:\Program Files\GTK3-Runtime Win64\bin\libcairo-2.dll');
-end;
-
 function IsWingetAvailable: Boolean;
 begin
   Result := HiddenCmdSucceeded('where winget >nul 2>nul');
@@ -297,7 +314,9 @@ end;
 
 function IsResistineRunning: Boolean;
 begin
-  Result := HiddenCmdSucceeded('tasklist /FI "IMAGENAME eq Resistine.exe" | find /I "Resistine.exe" >nul');
+  { Resistine.exe: builds from before the rename }
+  Result := HiddenCmdSucceeded('tasklist /FI "IMAGENAME eq Phoenix.exe" | find /I "Phoenix.exe" >nul') or
+            HiddenCmdSucceeded('tasklist /FI "IMAGENAME eq Resistine.exe" | find /I "Resistine.exe" >nul');
 end;
 
 function IsVpnServiceInstalled: Boolean;
@@ -316,9 +335,9 @@ var
   Params: string;
 begin
   if ForceKill then
-    Params := 'taskkill /F /T /IM Resistine.exe >nul 2>nul'
+    Params := 'taskkill /F /T /IM Phoenix.exe /IM Resistine.exe >nul 2>nul'
   else
-    Params := 'taskkill /T /IM Resistine.exe >nul 2>nul';
+    Params := 'taskkill /T /IM Phoenix.exe /IM Resistine.exe >nul 2>nul';
 
   { taskkill returns non-zero if not running; treat "not running" as success. }
   RunHiddenCmd(Params, ResultCode);
@@ -396,7 +415,8 @@ end;
 
 procedure DeleteResistineUserData;
 begin
-  DeleteDirectoryIfExists(GetResistineUserDataDir);
+  DeleteDirectoryIfExists(ExpandConstant('{userappdata}\Phoenix'));
+  DeleteDirectoryIfExists(GetLegacyUserDataDir);
   DeleteDirectoryIfExists(GetResistineCommonDataDir);
 end;
 
@@ -446,6 +466,7 @@ begin
   RegDeleteValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Run', 'ResistineVPNTray');
   RegDeleteValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Run', 'ResistineVPN');
   RegDeleteValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Resistine');
+  RegDeleteValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Phoenix');
 
   DeleteFile(ExpandConstant('{userdesktop}\Resistine VPN.lnk'));
 end;
@@ -554,13 +575,15 @@ begin
 
   { Always delete WireGuard config files on uninstall, not just when user opts-in }
   Log('Uninstall cleanup: removing WireGuard configuration files');
+  DeleteDirectoryIfExists(ExpandConstant('{userappdata}\Phoenix\wireguard'));
   DeleteDirectoryIfExists(ExpandConstant('{userappdata}\Resistine\wireguard'));
   DeleteDirectoryIfExists(ExpandConstant('{commonappdata}\Resistine\wireguard'));
 end;
 
 function HasAnyResistineUserData: Boolean;
 begin
-  Result := DirectoryExistsAndNotEmpty(GetResistineUserDataDir) or
+  Result := DirectoryExistsAndNotEmpty(ExpandConstant('{userappdata}\Phoenix')) or
+            DirectoryExistsAndNotEmpty(GetLegacyUserDataDir) or
             DirectoryExistsAndNotEmpty(GetResistineCommonDataDir);
 end;
 
@@ -699,11 +722,11 @@ begin
 
   if not (OkUser and OkCommon) then
   begin
-    ContinueWithoutBackup := MsgBox(
-      'Resistine could not back up all settings before reinstall.' + #13#10 +
+    ContinueWithoutBackup := SuppressibleMsgBox(
+      'Phoenix could not back up all settings before reinstall.' + #13#10 +
       'You can cancel and back up manually, or continue the reinstall without a complete backup.' + #13#10#13#10 +
       'Continue without backup?',
-      mbError, MB_YESNO);
+      mbError, MB_YESNO, IDNO);
     if ContinueWithoutBackup <> IDYES then
     begin
       Result := False;
@@ -730,10 +753,10 @@ begin
 
   if not (OkUser and OkCommon) then
   begin
-    MsgBox(
-      'Resistine completed installation, but some backed-up settings could not be restored automatically.' + #13#10 +
+    SuppressibleMsgBox(
+      'Phoenix completed installation, but some backed-up settings could not be restored automatically.' + #13#10 +
       'Backup folder: ' + ReinstallBackupRoot,
-      mbError, MB_OK);
+      mbError, MB_OK, IDOK);
   end;
 
   DeleteDirectoryIfExists(ReinstallBackupRoot);
@@ -745,11 +768,11 @@ var
   Response: Integer;
   ResultCode: Integer;
 begin
-  Response := MsgBox(
+  Response := SuppressibleMsgBox(
     FriendlyName + ' could not be installed automatically.' + #13#10 +
     Reason + #13#10#13#10 +
     'Open the download page now?' + #13#10 + Url,
-    mbError, MB_YESNO);
+    mbError, MB_YESNO, IDNO);
   if Response = IDYES then
     ShellExec('open', Url, '', '', SW_SHOWNORMAL, ewNoWait, ResultCode);
 end;
@@ -903,8 +926,7 @@ begin
     InstallBundledPython;
     InstallBundledWireGuard;
 
-    { Fall back to winget for anything the bundled installers missed,
-      and use winget for GTK (not bundled due to size) }
+    { Fall back to winget if the bundled WireGuard installer failed }
     if not IsWireGuardInstalled then
       RunWingetDependencyInstall(
         'WireGuard Desktop',
@@ -913,18 +935,11 @@ begin
         'https://www.wireguard.com/install/'
       );
 
-    RunWingetDependencyInstall(
-      'GTK Runtime (for Cairo graphics)',
-      'tschoonj.GTKForWindows',
-      'C:\Program Files\GTK3-Runtime Win64\bin\libcairo-2.dll',
-      'https://github.com/tschoonj/GTK-for-Windows-Runtime-Environment-Installer'
-    );
-
     if DependencyInstallWarnings <> '' then
-      MsgBox(
-        'Resistine installed successfully, but some optional dependencies still need attention:' + #13#10#13#10 +
+      SuppressibleMsgBox(
+        'Phoenix installed successfully, but some optional dependencies still need attention:' + #13#10#13#10 +
         DependencyInstallWarnings,
-        mbInformation, MB_OK);
+        mbInformation, MB_OK, IDOK);
   end;
 end;
 
@@ -935,11 +950,14 @@ begin
   if not ShouldPerformInstallAction then
     exit;
 
-  AppExe := QuotePath(ExpandConstant('{app}\Resistine.exe'));
+  AppExe := QuotePath(ExpandConstant('{app}\Phoenix.exe'));
+  { The pre-rename entry points at Resistine.exe, which is gone now. }
+  RegDeleteValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Resistine');
+  RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Resistine');
   if WizardIsTaskSelected('startup') then
-    RegWriteStringValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Resistine', AppExe)
+    RegWriteStringValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Phoenix', AppExe)
   else
-    RegDeleteValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Resistine');
+    RegDeleteValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Phoenix');
 end;
 
 procedure RunVpnServiceSetupRequired;
@@ -953,34 +971,34 @@ begin
   ScriptPath := ExpandConstant('{app}\install_service.bat');
   if not FileExists(ScriptPath) then
   begin
-    MsgBox(
+    SuppressibleMsgBox(
       'Required VPN service setup script was not found:' + #13#10 + ScriptPath + #13#10#13#10 +
-      'Resistine VPN features will not work until this is repaired.',
-      mbError, MB_OK);
+      'Phoenix VPN features will not work until this is repaired.',
+      mbError, MB_OK, IDOK);
     exit;
   end;
 
-  SetInstallStatus('Registering the Resistine VPN service...');
+  SetInstallStatus('Registering the Phoenix VPN service...');
   if not Exec(ExpandConstant('{cmd}'),
     '/D /C call ' + QuotePath(ScriptPath) + ' /quiet',
     ExpandConstant('{app}'),
     SW_HIDE, ewWaitUntilTerminated, ResultCode) then
   begin
-    MsgBox(
+    SuppressibleMsgBox(
       'The installer could not start required VPN service setup.' + #13#10 +
       'Run install_service.bat as Administrator after setup completes.',
-      mbError, MB_OK);
+      mbError, MB_OK, IDOK);
     exit;
   end;
 
   if ResultCode <> 0 then
   begin
-    MsgBox(
-      'Resistine installed, but required VPN service setup failed (exit code ' + IntToStr(ResultCode) + ').' + #13#10 +
+    SuppressibleMsgBox(
+      'Phoenix installed, but required VPN service setup failed (exit code ' + IntToStr(ResultCode) + ').' + #13#10 +
       'Check: C:\ProgramData\Resistine\vpn_service_install.log' + #13#10 +
       'If service registration succeeded but startup failed, also check: C:\ProgramData\Resistine\vpn_service.log' + #13#10 +
       'Then rerun install_service.bat as Administrator.',
-      mbError, MB_OK);
+      mbError, MB_OK, IDOK);
   end;
 end;
 
@@ -996,11 +1014,11 @@ begin
   if not IsResistineRunning then
     exit;
 
-  Response := MsgBox(
-    'Resistine is currently running and must be closed before setup can continue.' + #13#10#13#10 +
+  Response := SuppressibleMsgBox(
+    'Phoenix is currently running and must be closed before setup can continue.' + #13#10#13#10 +
     'Click Yes to let the installer close it automatically.' + #13#10 +
     'Click No to close it yourself and restart setup later.',
-    mbConfirmation, MB_YESNO);
+    mbConfirmation, MB_YESNO, IDYES);
   if Response <> IDYES then
   begin
     Result := False;
@@ -1010,16 +1028,16 @@ begin
   if TryKillResistineProcess(False) then
     exit;
 
-  Response := MsgBox(
-    'Resistine did not close cleanly.' + #13#10#13#10 +
+  Response := SuppressibleMsgBox(
+    'Phoenix did not close cleanly.' + #13#10#13#10 +
     'Force close it now?',
-    mbConfirmation, MB_YESNO);
+    mbConfirmation, MB_YESNO, IDYES);
   if (Response = IDYES) and TryKillResistineProcess(True) then
     exit;
 
   if IsResistineRunning then
   begin
-    MsgBox('Please close Resistine and run the installer again.', mbError, MB_OK);
+    SuppressibleMsgBox('Please close Phoenix and run the installer again.', mbError, MB_OK, IDOK);
     Result := False;
   end;
 end;
@@ -1037,10 +1055,10 @@ begin
 
   if IsResistineRunning then
   begin
-    MsgBox(
-      'Resistine is still running and could not be closed automatically.' + #13#10 +
+    SuppressibleMsgBox(
+      'Phoenix is still running and could not be closed automatically.' + #13#10 +
       'Please close it manually and run uninstall again.',
-      mbError, MB_OK);
+      mbError, MB_OK, IDOK);
     Result := False;
   end;
 end;
@@ -1072,9 +1090,9 @@ begin
     maInstall:
       Result := 'Installs this version over the current app files. Your settings, logs, and VPN data stay in place.';
     maReinstall:
-      Result := 'Repairs a broken installation by uninstalling and reinstalling Resistine. You can back up data first.';
+      Result := 'Repairs a broken installation by uninstalling and reinstalling Phoenix. You can back up data first.';
     maUninstall:
-      Result := 'Uninstalls Resistine and exits setup. You can choose whether to keep or remove user data.';
+      Result := 'Uninstalls Phoenix and exits setup. You can choose whether to keep or remove user data.';
   else
     Result := '';
   end;
@@ -1146,7 +1164,6 @@ procedure BuildPreflightSummaryParts(var ActionText, ChecksText, TasksText: stri
 var
   PythonState: string;
   WireGuardState: string;
-  GtkState: string;
   WingetState: string;
   InternetState: string;
   RunningState: string;
@@ -1161,11 +1178,6 @@ begin
     WireGuardState := 'Installed'
   else
     WireGuardState := 'Missing (bundled installer will run)';
-
-  if IsGtkRuntimeInstalled then
-    GtkState := 'Installed'
-  else
-    GtkState := 'Missing (installer will try winget)';
 
   WingetState := BoolStatus(IsWingetAvailable, 'Available', 'Missing');
   InternetState := BoolStatus(IsInternetReachable, 'Reachable (ICMP heuristic)', 'Not confirmed');
@@ -1190,10 +1202,9 @@ begin
   ChecksText :=
     '- Python: ' + PythonState + #13#10 +
     '- WireGuard Desktop: ' + WireGuardState + #13#10 +
-    '- GTK Runtime: ' + GtkState + #13#10 +
     '- winget: ' + WingetState + #13#10 +
     '- Internet: ' + InternetState + #13#10 +
-    '- Resistine app: ' + RunningState + #13#10 +
+    '- Phoenix app: ' + RunningState + #13#10 +
     '- VPN Windows service: ' + VpnServiceState;
 
   TasksText :=
@@ -1293,8 +1304,9 @@ begin
 
   if ExistingInstallDir <> '' then
   begin
-    AppExePath := AddBackslash(ExistingInstallDir) + 'Resistine.exe';
-    ExistingAppExecutableAvailable := FileExists(AppExePath);
+    AppExePath := AddBackslash(ExistingInstallDir) + 'Phoenix.exe';
+    ExistingAppExecutableAvailable := FileExists(AppExePath) or
+      FileExists(AddBackslash(ExistingInstallDir) + 'Resistine.exe');
   end;
 
   if ExistingUninstallCmd <> '' then
@@ -1351,10 +1363,10 @@ begin
   ExePath := ExtractExePathFromCommand(ExistingUninstallCmd);
   if (ExePath = '') or (not FileExists(ExePath)) then
   begin
-    MsgBox(
+    SuppressibleMsgBox(
       'An existing installation was detected, but its uninstaller could not be found.' + #13#10 +
-      'Please uninstall Resistine manually first.',
-      mbError, MB_OK);
+      'Please uninstall Phoenix manually first.',
+      mbError, MB_OK, IDOK);
     exit;
   end;
 
@@ -1374,11 +1386,11 @@ begin
     Log('Uninstaller exit code: ' + IntToStr(ResultCode));
     Result := (ResultCode = 0);
     if not Result then
-      MsgBox('The existing uninstaller returned a non-zero exit code (' + IntToStr(ResultCode) + ').', mbError, MB_OK);
+      SuppressibleMsgBox('The existing uninstaller returned a non-zero exit code (' + IntToStr(ResultCode) + ').', mbError, MB_OK, IDOK);
   end
   else
   begin
-    MsgBox('Failed to launch the existing uninstaller.', mbError, MB_OK);
+    SuppressibleMsgBox('Failed to launch the existing uninstaller.', mbError, MB_OK, IDOK);
   end;
 end;
 
@@ -1387,7 +1399,7 @@ var
   CompareResult: Integer;
   StatusLine: string;
 begin
-  StatusLine := 'Detected an existing Resistine installation.';
+  StatusLine := 'Detected an existing Phoenix installation.';
   if ExistingInstallVersion <> '' then
   begin
     CompareResult := CompareVersionStrings(ExistingInstallVersion, '{#AppVersion}');
@@ -1419,7 +1431,7 @@ begin
 
   if ExistingInstallDetected then
   begin
-    MaintenancePage := CreateCustomPage(wpWelcome, 'Resistine Is Already Installed', 'Choose how you want to continue');
+    MaintenancePage := CreateCustomPage(wpWelcome, 'Phoenix Is Already Installed', 'Choose how you want to continue');
 
     MaintenanceInfoLabel := TNewStaticText.Create(MaintenancePage);
     MaintenanceInfoLabel.Parent := MaintenancePage.Surface;
@@ -1546,7 +1558,7 @@ begin
     if HasAnyResistineUserData then
       BackupHelpLabel.Caption := 'Recommended for Repair. Backs up settings and VPN data and restores them after reinstall when possible.'
     else
-      BackupHelpLabel.Caption := 'No Resistine user data was detected to back up.';
+      BackupHelpLabel.Caption := 'No Phoenix user data was detected to back up.';
     WizardForm.AdjustLabelHeight(BackupHelpLabel);
     NextTop := BackupHelpLabel.Top + BackupHelpLabel.Height + ScaleY(6);
 
@@ -1572,7 +1584,7 @@ begin
     if HasAnyResistineUserData then
       RemoveUserDataHelpLabel.Caption := 'Deletes settings, logs, and VPN service data from user and common app-data folders.'
     else
-      RemoveUserDataHelpLabel.Caption := 'No Resistine user data was detected.';
+      RemoveUserDataHelpLabel.Caption := 'No Phoenix user data was detected.';
     WizardForm.AdjustLabelHeight(RemoveUserDataHelpLabel);
 
     RefreshMaintenanceSelectionUI;
@@ -1697,7 +1709,7 @@ begin
       RemoveUserDataAfterUninstall := True;
 
       ConfirmText :=
-        'This will uninstall the existing Resistine installation and close setup.' + #13#10#13#10 +
+        'This will uninstall the existing Phoenix installation and close setup.' + #13#10#13#10 +
         'What will be removed:' + #13#10 +
         '- Application files in: ' + ExistingInstallDir + #13#10 +
         '- Start Menu / desktop shortcuts' + #13#10 +
@@ -1706,7 +1718,7 @@ begin
         '  (' + GetResistineUserDataDir + ' and ' + GetResistineCommonDataDir + ')' + #13#10 + #13#10 +
         'Continue?';
 
-      if MsgBox(ConfirmText, mbConfirmation, MB_YESNO) = IDYES then
+      if SuppressibleMsgBox(ConfirmText, mbConfirmation, MB_YESNO, IDNO) = IDYES then
       begin
         ExistingIsInno := ExistingUninstallerLooksLikeInno;
         if ExistingIsInno then
@@ -1718,7 +1730,7 @@ begin
 
           if not ExistingIsInno then
           begin
-            MsgBox('Uninstall completed and all user data was removed. Setup will now exit.', mbInformation, MB_OK);
+            SuppressibleMsgBox('Uninstall completed and all user data was removed. Setup will now exit.', mbInformation, MB_OK, IDOK);
           end;
 
           CloseAfterMaintenanceUninstall := True;
@@ -1768,17 +1780,6 @@ begin
   Result := SelectedAction <> maUninstall;
 end;
 
-function NeedGtkRuntimeInstall: Boolean;
-begin
-  Result := ShouldPerformInstallAction and
-    (not FileExists('C:\Program Files\GTK3-Runtime Win64\bin\libcairo-2.dll'));
-end;
-
-function ShouldInstallGtkRuntime: Boolean;
-begin
-  Result := NeedGtkRuntimeInstall;
-end;
-
 procedure CurPageChanged(CurPageID: Integer);
 begin
   if (MaintenancePage <> nil) and (CurPageID = MaintenancePage.ID) then
@@ -1792,7 +1793,7 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
   if not EnsureResistineClosedForInstall then
-    Result := 'Resistine must be closed before installation can continue.';
+    Result := 'Phoenix must be closed before installation can continue.';
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -1839,7 +1840,7 @@ begin
     exit;
 
   Summary :=
-    'This will uninstall Resistine from:' + #13#10 +
+    'This will uninstall Phoenix from:' + #13#10 +
     ExpandConstant('{app}') + #13#10#13#10 +
     'The uninstaller will remove:' + #13#10 +
     '- ResistineVPN service' + #13#10 +
@@ -1853,7 +1854,7 @@ begin
     '  ' + GetResistineCommonDataDir + #13#10#13#10 +
     'Continue?';
 
-  Response := MsgBox(Summary, mbConfirmation, MB_YESNO);
+  Response := SuppressibleMsgBox(Summary, mbConfirmation, MB_YESNO, IDYES);
   if Response <> IDYES then
   begin
     Result := False;
@@ -1952,6 +1953,7 @@ begin
   if CurUninstallStep = usPostUninstall then
   begin
     { Remove keyring credentials (master key + update signing key) }
+    RunHiddenCmd('cmdkey /delete:phoenix-master-key >nul 2>nul', ResultCode);
     RunHiddenCmd('cmdkey /delete:resistine-master-key >nul 2>nul', ResultCode);
     RunHiddenCmd('cmdkey /delete:resistine-updates >nul 2>nul', ResultCode);
 
