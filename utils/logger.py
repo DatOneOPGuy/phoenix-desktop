@@ -46,7 +46,7 @@ class OTELink:
         self.logger_provider = LoggerProvider(resource=resource)
         _logs.set_logger_provider(self.logger_provider)
 
-        # OTLP/HTTP receiver. Default routes to the Resistine collector, which
+        # OTLP/HTTP receiver. Default routes to the Phoenix collector, which
         # forwards into the wazuh-indexer. Reachable only over the VPN; the
         # BatchLogRecordProcessor silently drops batches when unreachable.
         exporter = OTLPLogExporter(endpoint=f"{_otlp_endpoint()}/v1/logs")

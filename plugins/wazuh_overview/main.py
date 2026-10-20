@@ -22,8 +22,8 @@ from the source almost verbatim; only the UI is a PyQt rewrite. All blocking
 work runs on daemon threads and is marshalled back onto the GUI thread via
 ``self.app.after(0, ...)``.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

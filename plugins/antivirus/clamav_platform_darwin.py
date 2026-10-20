@@ -3,8 +3,8 @@
 Binary discovery, daemon registration (SMAppService / launchd),
 Full Disk Access checks, and library path setup for macOS.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 from __future__ import annotations

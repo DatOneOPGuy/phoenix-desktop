@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Phoenix Desktop (formerly Resistine Desktop) is a cross-platform (macOS/Linux/Windows) security desktop app built with Python and **PyQt6**. It provides VPN (WireGuard), antivirus (ClamAV), SIEM (Wazuh), endpoint management, and AI chat through a modular plugin system.
+Phoenix Desktop is a cross-platform (macOS/Linux/Windows) security desktop app built with Python and **PyQt6**. It provides VPN (WireGuard), antivirus (ClamAV), SIEM (Wazuh), endpoint management, and AI chat through a modular plugin system.
 
 ## Commands
 
@@ -61,7 +61,7 @@ Configured linters: ruff, black, isort, bandit, shellcheck, shfmt, markdownlint,
 ./scripts/build/build-windows-vm.sh     # Phoenix-Setup-<version>.exe into dist/installers/
 ```
 
-Runs `scripts/build/build-windows-installer.ps1` (PyInstaller + Inno Setup) over SSH in a throwaway copy of a golden Windows image (dockur/windows, needs docker and /dev/kvm). The installer must stay silent-safe: WinSparkle upgrades run it with `/VERYSILENT /SUPPRESSMSGBOXES`, so use `SuppressibleMsgBox`, never `MsgBox`.
+Runs `scripts/build/build-windows-installer.ps1` (PyInstaller + Inno Setup) over SSH in a throwaway copy of a golden Windows image (dockur/windows, needs docker and /dev/kvm). The installer must stay silent-safe: automated upgrades run it with `/VERYSILENT /SUPPRESSMSGBOXES`, so use `SuppressibleMsgBox`, never `MsgBox`.
 
 ### Build (Linux)
 
@@ -103,7 +103,7 @@ Platform-specific implementations live in `*_functions_{darwin,linux,windows}.py
 
 ### Settings & Secrets
 
-`utils/settings.py` provides namespaced JSON config with Fernet encryption for secrets (prefixed `ENC:`). Master key stored in system keyring. Config dirs: `~/Library/Application Support/Resistine` (macOS), `%APPDATA%/Resistine` (Windows), `~/.config/resistine` (Linux).
+`utils/settings.py` provides namespaced JSON config with Fernet encryption for secrets (prefixed `ENC:`). Master key stored in system keyring. Config dirs (legacy directory names kept for install compatibility, pending migration): `~/Library/Application Support/Resistine` (macOS), `%APPDATA%/Resistine` (Windows), `~/.config/resistine` (Linux).
 
 ### Auth
 
@@ -116,15 +116,15 @@ Platform-specific implementations live in `*_functions_{darwin,linux,windows}.py
 ### CI/CD
 
 - `.github/workflows/ci.yml`: compileall + pip-audit on push/PR (Python 3.13)
-- `.github/workflows/release.yml`: macOS build + sign + notarize + DMG + Sparkle appcast on version tags
+- `.github/workflows/release.yml`: macOS build + sign + notarize + DMG on version tags (appcast publishing retired with the old update channel)
 
 ### Updates
 
-macOS: Sparkle framework (EdDSA via `SUPublicEDKey` — verification lives in Sparkle, not Python). Windows: WinSparkle (init aborts if the EdDSA key is rejected). Linux: `utils/updates/linux.py` verifies the Ed25519 signature itself — mandatory, unsigned entries are refused.
+**Auto-updates are hard-disabled** (`utils/updates/manager.py: UPDATES_ENABLED = False`): the legacy feed and its signing keys belong to the old company, so Phoenix builds carry no feed URL and no update public key. Re-enabling requires Phoenix-owned feed infrastructure plus a FRESH signing keypair generated in CI — never re-point at the old endpoint. The platform backends (`utils/updates/{darwin,windows,linux}.py`) keep their verification logic: signatures are mandatory, unsigned entries are refused.
 
 ### External Artifacts
 
-VPN CLI binary and ClamAV binaries are fetched during the build via `gh` CLI (currently from the old Resistine org's CI — being re-homed to Phoenix infrastructure).
+VPN CLI binary and ClamAV binaries are fetched during the build via `gh` CLI (currently from legacy artifact repos — being re-homed to Phoenix infrastructure along with signing certificates).
 
 ## Key Conventions
 

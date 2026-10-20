@@ -1,7 +1,7 @@
 """
-Configuration file for Resistine Login Plugin
+Configuration file for the Phoenix Login Plugin
 Author: Jacqueline Edoro
-Copyright (c) Resistine 2025
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

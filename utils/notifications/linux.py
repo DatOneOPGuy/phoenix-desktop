@@ -11,8 +11,8 @@ Sending runs on a daemon thread because opening the bus and awaiting the reply
 blocks briefly; the macOS backend's send is async, so this keeps parity (never
 stalls the caller, which is usually the UI thread).
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

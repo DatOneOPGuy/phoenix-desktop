@@ -20,8 +20,8 @@ Phase 2 — Privileged work (single admin prompt):
 Phase 3 — App bundle removal (privileged if needed):
   - Remove the .app bundle from /Applications (admin rm -rf)
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 
@@ -777,7 +777,7 @@ def _collect_app_bundle_admin_cmd(admin_cmds):
         logger.info("[UNINSTALL] Not a frozen app, skipping bundle removal")
         return
 
-    # sys.executable → .../Resistine.app/Contents/MacOS/Resistine
+    # sys.executable → .../Phoenix.app/Contents/MacOS/Phoenix
     from pathlib import Path
     app_bundle = str(Path(sys.executable).parents[2])
 

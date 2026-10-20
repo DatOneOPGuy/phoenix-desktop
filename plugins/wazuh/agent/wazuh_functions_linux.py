@@ -1,8 +1,8 @@
 """
 Wazuh Agent Functions for Linux
 Handles download, install, start/stop of the Wazuh SIEM agent using systemd and package managers.
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

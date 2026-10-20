@@ -1,7 +1,7 @@
 """
 Windows Service to manage WireGuard VPN tunnels for Phoenix VPN.
 Authors: Merhawi
-Copyright (c) Resistine 2025
+Copyright (c) Phoenix 2025
 This service listens for commands from the GUI and manages WireGuard tunnels
 accordingly. It also auto-starts a default tunnel if present in ProgramData.
 """

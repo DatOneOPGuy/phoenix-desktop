@@ -12,8 +12,8 @@ backends are called, not rewritten; status is refreshed by a re-arming
 ``app.after(5000, ...)`` poll that runs the blocking status check on a
 worker thread.
 
-Author: Javier Perez and Jacqueline Edoro (original); Resistine Team (Qt port)
-Copyright (c) Resistine 2025
+Author: Javier Perez and Jacqueline Edoro (original); Phoenix Team (Qt port)
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

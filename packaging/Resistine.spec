@@ -302,10 +302,10 @@ if IS_MACOS:
                 }
             ],
 
-            # Sparkle Auto-Update
-            'SUFeedURL': 'https://resistine.github.io/appcast.xml',
-            'SUPublicEDKey': '2eiUHVoMgl+qqhEWO8iix5SUcRAKfkWYESh9F7jG6ls=',
-            'SUEnableAutomaticChecks': True,
-            'SUScheduledCheckInterval': 14400,  # 4 hours (base; Python scheduler adds jitter)
+            # Sparkle Auto-Update — DISABLED for the Phoenix migration.
+            # No SUFeedURL and no SUPublicEDKey: the old feed and signing key
+            # belong to Resistine; a Phoenix build must never consult them.
+            # Re-enable only with a Phoenix-owned feed + a fresh EdDSA key.
+            'SUEnableAutomaticChecks': False,
         },
     )

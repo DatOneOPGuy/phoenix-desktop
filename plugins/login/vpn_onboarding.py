@@ -3,8 +3,8 @@
 # Description: VPN onboarding screen shown after first signup on macOS.
 # Guides users through system extension approval for seamless VPN setup.
 
-# Author: Resistine Team
-# Copyright: Resistine (c) 2025
+# Author: Phoenix Team
+# Copyright: Phoenix (c) 2025
 # Licensed under the GNU General Public License v2 or later
 
 import os
@@ -197,7 +197,7 @@ class VPNOnboardingScreen:
             steps = [
                 ("1", "A macOS dialog will appear.\n    Click \"Open System Settings\""),
                 ("2", f"Go to {setting_path}"),
-                ("3", "Enable the Resistine extension\n    and click Allow"),
+                ("3", "Enable the Phoenix VPN extension\n    and click Allow"),
             ]
         else:
             steps = [

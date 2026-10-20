@@ -19,8 +19,8 @@
 # auto-advances when the capability reports ready. All UI-thread marshalling is
 # done by the wizard — steps just call on_status() from wherever they run.
 #
-# Author: Resistine Team
-# Copyright: Resistine (c) 2025
+# Author: Phoenix Team
+# Copyright: Phoenix (c) 2025
 # Licensed under the GNU General Public License v2 or later
 
 import platform
@@ -216,7 +216,7 @@ class _VPNStepMac(_VPNStepBase):
     title = get_text("login.setup_steps.enable_connect_vpn")
     subtitle = get_text("login.setup_steps.secure_your_connection_with_a")
     detail = (
-        "Resistine installs a system network extension, then connects you to a "
+        "Phoenix installs a system network extension, then connects you to a "
         "secure VPN. Approving the extension is a one-time step in System "
         "Settings."
     )
@@ -272,7 +272,7 @@ class _VPNStepMac(_VPNStepBase):
                 return True
             time.sleep(0.5)
         self._open_settings()
-        on_status("Approve the Resistine extension in System Settings — this "
+        on_status("Approve the Phoenix VPN extension in System Settings — this "
                   "continues automatically once enabled.")
         deadline = time.time() + 300
         while time.time() < deadline:
@@ -309,7 +309,7 @@ class _VPNStepMac(_VPNStepBase):
         return [
             "A macOS dialog appears — click “Open System Settings”.",
             where,
-            "Enable the Resistine extension and click Allow.",
+            "Enable the Phoenix VPN extension and click Allow.",
         ]
 
 
@@ -317,7 +317,7 @@ class _VPNStepWindows(_VPNStepBase):
     title = get_text("login.setup_steps.set_up_connect_vpn")
     subtitle = get_text("login.setup_steps.install_wireguard_to_secure_your")
     detail = (
-        "Resistine's VPN is powered by WireGuard. Install it once and Resistine "
+        "Phoenix's VPN is powered by WireGuard. Install it once and Phoenix "
         "connects and manages the secure tunnel for you."
     )
     instructions = [
@@ -352,7 +352,7 @@ class _VPNStepLinux(_VPNStepBase):
     title = get_text("login.setup_steps.set_up_connect_vpn")
     subtitle = get_text("login.setup_steps.install_wireguard_to_secure_your")
     detail = (
-        "Resistine's VPN is powered by WireGuard. We'll install the tools and "
+        "Phoenix's VPN is powered by WireGuard. We'll install the tools and "
         "connect you — you may be asked for your password."
     )
     primary_label = get_text("login.setup_steps.set_up_vpn")
@@ -387,7 +387,7 @@ class _AntivirusStepMac(SetupStep):
     title = get_text("login.setup_steps.turn_on_antivirus")
     subtitle = get_text("login.setup_steps.real_time_malware_scanning_with")
     detail = (
-        "Resistine downloads virus definitions and installs the ClamAV scanning "
+        "Phoenix downloads virus definitions and installs the ClamAV scanning "
         "service. You'll be asked once for your administrator password, then to "
         "approve it in System Settings — first in Login Items & Extensions, then "
         "Full Disk Access."
@@ -395,7 +395,7 @@ class _AntivirusStepMac(SetupStep):
     instructions = [
         "Click “Enable Antivirus” and enter your administrator password.",
         "Enable all the ClamAV items under Login Items & Extensions.",
-        "Then grant Resistine Full Disk Access when prompted — protection turns "
+        "Then grant Phoenix Full Disk Access when prompted — protection turns "
         "on automatically.",
     ]
     primary_label = get_text("login.setup_steps.enable_antivirus")
@@ -597,7 +597,7 @@ class _AntivirusStepMac(SetupStep):
                         logger.info("[AV-SETUP] opening Full Disk Access")
                         self._open_pane("open_fda_settings")
                         opened_fda = True
-                    on_status("Step 2 of 2 — turn on Full Disk Access for Resistine "
+                    on_status("Step 2 of 2 — turn on Full Disk Access for Phoenix "
                               "under System Settings ▸ Privacy & Security… "
                               f"({elapsed}s)")
                 else:  # offline — actively (re)start the daemons
@@ -659,7 +659,7 @@ class _AntivirusStepDefender(SetupStep):
     title = get_text("login.setup_steps.turn_on_antivirus")
     subtitle = get_text("login.setup_steps.enable_real_time_malware_protection")
     detail = (
-        "Resistine turns on real-time antivirus protection. You may be asked to "
+        "Phoenix turns on real-time antivirus protection. You may be asked to "
         "approve an administrator prompt."
     )
     primary_label = get_text("login.setup_steps.enable_antivirus")
@@ -669,12 +669,12 @@ class _AntivirusStepDefender(SetupStep):
         super().__init__(app)
         if _PLATFORM == "Windows":
             self.detail = (
-                "Resistine enables Microsoft Defender real-time protection. "
+                "Phoenix enables Microsoft Defender real-time protection. "
                 "Approve the Windows prompt to continue."
             )
         else:
             self.detail = (
-                "Resistine installs and starts the ClamAV scanning service. "
+                "Phoenix installs and starts the ClamAV scanning service. "
                 "You may be asked for your password."
             )
 
@@ -867,7 +867,7 @@ class _EndpointStepMac(SetupStep):
     title = get_text("login.setup_steps.install_endpoint_monitoring")
     subtitle = get_text("login.setup_steps.detect_threats_with_the_siem")
     detail = (
-        "The Resistine endpoint agent watches your device for suspicious "
+        "The Phoenix endpoint agent watches your device for suspicious "
         "activity and reports it securely. You'll be asked once for your "
         "administrator password."
     )
@@ -1027,7 +1027,7 @@ class _EndpointStepDirect(SetupStep):
     title = get_text("login.setup_steps.install_endpoint_monitoring")
     subtitle = get_text("login.setup_steps.detect_threats_with_the_siem")
     detail = (
-        "The Resistine endpoint agent watches your device for suspicious "
+        "The Phoenix endpoint agent watches your device for suspicious "
         "activity and reports it securely. You may be asked to approve an "
         "administrator prompt."
     )

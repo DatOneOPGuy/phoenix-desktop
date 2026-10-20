@@ -6,8 +6,8 @@ Linux entries (sparkle:os="linux"), presents a rich update dialog, downloads
 a signed tarball, verifies its Ed25519 signature, extracts in-place over the
 running source tree, and restarts the app.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 from __future__ import annotations
@@ -29,7 +29,9 @@ from utils.updates.version import get_current_version, get_project_root
 from utils.i18n import get_text
 
 # Ed25519 public key (same key pair used by macOS Sparkle signatures)
-_ED25519_PUBLIC_KEY_B64 = "2eiUHVoMgl+qqhEWO8iix5SUcRAKfkWYESh9F7jG6ls="
+# Intentionally empty: the old key belongs to Phoenix. A Phoenix
+# update key must be a FRESH pair generated in CI — never reuse this slot.
+_ED25519_PUBLIC_KEY_B64 = ""
 
 # Module state
 _app = None

@@ -1,6 +1,6 @@
 # Documentation
 
-Welcome to the Resistine documentation. Here you'll find detailed information about various aspects of the application including the coding guide.
+Welcome to the Phoenix documentation. Here you'll find detailed information about various aspects of the application including the coding guide.
 
 ## Available Documentation
 

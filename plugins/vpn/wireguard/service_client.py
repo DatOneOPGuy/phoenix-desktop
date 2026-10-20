@@ -1,7 +1,7 @@
 """
 IPC client for the ResistineVPN Windows service.
 Authors: Merhawi
-Copyright (c) Resistine 2025
+Copyright (c) Phoenix 2025
 """
 import json
 import os

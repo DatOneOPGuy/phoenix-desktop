@@ -12,8 +12,8 @@ agent after a reinstall). Reading the real status lets the UI show
 This module is pure (no platform imports, no I/O side effects beyond reading
 the caller-supplied paths) so it is trivially unit-testable on any OS.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

@@ -9,8 +9,8 @@ load" badge on the UI. The functions also normalize a few known response-shape
 variants (flat vs basic_info-wrapped, cves vs data.affected_items) so callers
 in main.py don't have to repeat the destructuring.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

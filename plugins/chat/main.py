@@ -20,8 +20,8 @@ same regions 1:1:
 The streaming controller, history manager and markdown utilities are reused
 verbatim from the framework-agnostic backend modules.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 from __future__ import annotations
@@ -92,7 +92,7 @@ _ARRIVE_MS = 200
 def _tls_verify() -> str | bool:
     """httpx ``verify`` value for the HTTPS chat endpoint.
 
-    The dashboard's certificate is signed either by the internal Resistine
+    The dashboard's certificate is signed either by the internal Phoenix
     root CA (leaf-only, no intermediate) or by the Cloudflare Origin CA
     (*.phoenix.exposed). Neither is in certifi, so the app ships both roots
     in ``resources/certs/chat-ca-bundle.pem``. Resolution order:

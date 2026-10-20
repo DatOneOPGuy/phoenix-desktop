@@ -2,8 +2,8 @@
 Wazuh Agent Functions for macOS
 Handles download, install, start/stop of the Wazuh SIEM agent via osascript
 privilege escalation.
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

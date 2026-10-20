@@ -6,8 +6,8 @@ resources/themes/resistine_ctk.json) or read named tokens from
 ThemeManager at call time. That way the antivirus page tracks any
 app-wide palette change without a parallel set of constants.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 
@@ -18,7 +18,7 @@ CORNER_R = 12
 PAD_X = 20
 _FONT_FAMILY = "Inter"
 
-# Palette tuples (light, dark) mirroring tokens in resistine_ctk.json.
+# Palette tuples (light, dark) mirroring tokens in phoenix_ctk.json.
 # Kept as module constants so ui_cards.py and main.py can import them;
 # values are evaluated once at widget-construction time, which is fine
 # because theme switches trigger a full main-screen rebuild.

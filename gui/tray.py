@@ -1,8 +1,8 @@
 # tray.py
 """
-Resistine VPN System Tray Icon — standalone, no project imports.
-Authors: Merhawi and the Resistine Team
-Copyright (c) Resistine 2025
+Phoenix VPN System Tray Icon — standalone, no project imports.
+Authors: Merhawi and the Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 
@@ -287,10 +287,10 @@ class ResistineTray:
 
     def _title(self) -> str:
         return {
-            "connected":    "Resistine VPN — Connected",
-            "disconnected": "Resistine VPN — Disconnected",
-            "connecting":   "Resistine VPN — Connecting...",
-        }.get(self._state, "Resistine VPN")
+            "connected":    "Phoenix VPN — Connected",
+            "disconnected": "Phoenix VPN — Disconnected",
+            "connecting":   "Phoenix VPN — Connecting...",
+        }.get(self._state, "Phoenix VPN")
 
     # ---- Actions ----
 
@@ -335,8 +335,8 @@ class ResistineTray:
             import ctypes
             import ctypes.wintypes
 
-            # Find window by title prefix — main.py sets the window title to "Resistine"
-            hwnd = ctypes.windll.user32.FindWindowW(None, "Resistine")
+            # Find window by title prefix — main.py sets the window title to "Phoenix"
+            hwnd = ctypes.windll.user32.FindWindowW(None, "Phoenix")
             if hwnd:
                 # Window exists — bring it to foreground
                 SW_RESTORE = 9

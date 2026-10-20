@@ -105,7 +105,7 @@ class TestGetActiveConfigName:
         """If the saved active config file no longer exists, fall back."""
         write_conf(RESISTINE_CONFIG_NAME)
         isolated_settings.set("vpn", "active_config", "deleted_config")
-        # deleted_config.conf doesn't exist → should fall back to resistine
+        # deleted_config.conf doesn't exist → should fall back to phoenix
         assert mgr.get_active_config_name() == RESISTINE_CONFIG_NAME
 
 

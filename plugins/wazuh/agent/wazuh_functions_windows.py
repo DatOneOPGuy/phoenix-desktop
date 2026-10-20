@@ -2,8 +2,8 @@
 Wazuh Agent Functions for Windows
 Handles download, install, start/stop of the Wazuh SIEM agent and Sysmon
 using PowerShell privilege escalation.
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

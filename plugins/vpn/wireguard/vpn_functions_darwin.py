@@ -1,7 +1,7 @@
 """
 VPN Functions for WireGuard on macOS
 Author: Jacqueline Edoro
-Copyright (c) Resistine 2025
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

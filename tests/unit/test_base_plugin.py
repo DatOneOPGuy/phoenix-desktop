@@ -210,7 +210,7 @@ class TestGettersSetters:
 
 
 # ===========================================================================
-# is_resistine_config (VPN specific static check via config_manager)
+# is_phoenix_config (VPN specific static check via config_manager)
 # ===========================================================================
 @pytest.mark.unit
 def test_status_map_completeness():

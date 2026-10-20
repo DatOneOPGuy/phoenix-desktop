@@ -1,6 +1,6 @@
-# Resistine Help
+# Phoenix Help
 
-Welcome to Resistine! This application is designed to help you manage your digital privacy and security.
+Welcome to Phoenix! This application is designed to help you manage your digital privacy and security.
 
 ## Getting Started
 
@@ -9,7 +9,7 @@ To get started, simply navigate through the tabs on the left side of the window.
 ## Features
 
 - **Dashboard**: View an overview of your system's status.
-- **Chat**: Chat with Resistine AI.
+- **Chat**: Chat with Phoenix AI.
 - **EndPoint**: Manage your computer.
 - **Antivirus**: Manage your antivirus.
 - **VPN**: Connect to a secure VPN server.
@@ -34,13 +34,13 @@ If you encounter any issues, please check the logs or contact support.
 
 ## About
 
-Resistine AI EndPoint Detection and Response (AI EDR)
+Phoenix AI EndPoint Detection and Response (AI EDR)
 for Windows, Mac and Linux Desktops
 
-Copyright (C) 2025 Resistine
+Copyright (C) 2025 Phoenix
 
 This program is free software under the terms of the GNU General Public License v2 or later
 
-Resistine comes with ABSOLUTELY NO WARRANTY.
+Phoenix comes with ABSOLUTELY NO WARRANTY.
 
 See the [LICENSE](../LICENSE.md) file for more details.

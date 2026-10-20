@@ -7,8 +7,8 @@ below mirrors real responses from /api/v1/me/inventory/{agent_id} for a Windows
 and a macOS agent, including their quirks (pid as a string while ppid is an
 int, whitespace-only placeholders, ram_* reported in KB despite the _mb name).
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

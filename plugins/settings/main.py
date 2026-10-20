@@ -6,8 +6,8 @@ A flat page (gui/page_kit.py): a "Settings" header naming the signed-in
 account, then sections — Account, AI assistant, Appearance, Notifications,
 Updates — and a last section with the Log in / Log out and Uninstall actions as menu rows.
 
-Author: Peres J. and the Resistine Team
-Copyright (c) Resistine 2025
+Author: Peres J. and the Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

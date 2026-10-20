@@ -5,8 +5,8 @@ This module contains functions for managing a WireGuard VPN on Linux.
 The functions include checking if WireGuard is installed, generating keys,
 creating a WireGuard configuration file, starting and stopping the VPN service,
 and checking the status of the VPN service.
-Author: Petr and the Resistine Team
-Copyright (c) Resistine 2025
+Author: Petr and the Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

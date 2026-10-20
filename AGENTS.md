@@ -4,7 +4,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Project Overview
 
-Resistine Desktop is a cross-platform (macOS/Linux/Windows) security desktop app built with Python and CustomTkinter. It provides VPN (WireGuard), antivirus (ClamAV), SIEM (Wazuh), endpoint management, and AI chat through a modular plugin system.
+Phoenix Desktop is a cross-platform (macOS/Linux/Windows) security desktop app built with Python and CustomTkinter. It provides VPN (WireGuard), antivirus (ClamAV), SIEM (Wazuh), endpoint management, and AI chat through a modular plugin system.
 
 ## Commands
 
@@ -84,7 +84,7 @@ Platform-specific implementations live in `*_functions_{darwin,linux,windows}.py
 
 ### External Artifacts
 
-VPN CLI binary downloaded from `Resistine/resistine-vpn-macos` CI. ClamAV binaries from `Resistine/ClamAV-Mac` CI. Both are fetched during the build process via `gh` CLI.
+VPN CLI binary downloaded from `Phoenix/resistine-vpn-macos` CI. ClamAV binaries from `Resistine/ClamAV-Mac` CI. Both are fetched during the build process via `gh` CLI.
 
 ## Key Conventions
 

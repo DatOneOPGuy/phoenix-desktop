@@ -14,8 +14,8 @@ Two deliberate footprint choices carried over from the source:
    ``font_manager.findfont()`` resolves on the first candidate instead of
    scoring the ~10-font default chain against the system cache on every render.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

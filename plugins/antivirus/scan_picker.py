@@ -4,8 +4,8 @@ On macOS, uses the native NSOpenPanel which supports selecting files and
 folders simultaneously. On Windows/Linux, presents a custom CTkToplevel
 where users can add files, folders, or both before launching a scan.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 from __future__ import annotations

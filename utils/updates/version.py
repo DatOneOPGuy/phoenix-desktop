@@ -4,8 +4,8 @@ Version Helper — single source of truth for the current app version.
 Frozen (PyInstaller) builds: reads from the bundled VERSION file in _MEIPASS.
 Source / dev mode: parses VERSION = '...' from packaging/Resistine.spec.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

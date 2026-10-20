@@ -8,8 +8,8 @@ Usage:
     python tools/translate.py --from en --to de --plugin myplugin
     python tools/translate.py --list-missing --to es
 
-Author: Petr and the Resistine Team
-Copyright (c) Resistine 2025
+Author: Petr and the Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

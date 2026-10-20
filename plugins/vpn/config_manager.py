@@ -78,7 +78,7 @@ class VPNConfigManager:
         if active and os.path.exists(self.config_path(active)):
             return active
 
-        # Fallback: try resistine
+        # Fallback: try phoenix
         if os.path.exists(os.path.join(self.wireguard_folder, f"{RESISTINE_CONFIG_NAME}.conf")):
             self.set_active_config(RESISTINE_CONFIG_NAME)
             return RESISTINE_CONFIG_NAME
@@ -169,7 +169,7 @@ class VPNConfigManager:
             registry.pop(config_name, None)
             app_settings.set(SETTINGS_NAMESPACE, "config_registry", registry)
 
-            # If deleted config was active, switch to resistine or first available
+            # If deleted config was active, switch to phoenix or first available
             active = app_settings.get(SETTINGS_NAMESPACE, "active_config")
             if active == config_name:
                 self.get_active_config_name()  # triggers fallback logic to set a new active config

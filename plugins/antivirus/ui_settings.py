@@ -3,8 +3,8 @@
 Assembles the settings sub-view from existing card builders.
 No new UI logic — purely orchestration.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

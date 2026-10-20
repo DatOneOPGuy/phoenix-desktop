@@ -6,8 +6,8 @@ and horizontal rules inside chat bubbles.
 These replace the old window_create embedded widgets from MarkdownBubble,
 providing self-contained components that can be pack()'d into any parent.
 
-Author: P3 and the Resistine Team
-Copyright (c) Resistine 2025
+Author: P3 and the Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

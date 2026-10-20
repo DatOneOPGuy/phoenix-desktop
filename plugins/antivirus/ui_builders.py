@@ -3,8 +3,8 @@
 Builds the Status Card, Scan Actions / Real-Time Protection,
 and Scan Activity sections.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

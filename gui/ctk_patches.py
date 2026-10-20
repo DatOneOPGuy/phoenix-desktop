@@ -81,7 +81,7 @@ _sf.CTkScrollableFrame.__init__ = _sf_init_clamp_scroll
 #
 # This flush was also (accidentally) load-bearing for CTkScrollableFrame's
 # first-paint sizing — it masked the fact that _settle_screen() fits a scroll
-# frame's inner content BEFORE a plugin's _resistine_finalize widens its
+# frame's inner content BEFORE a plugin's _phoenix_finalize widens its
 # column. _settle_screen now re-fits after the finalizers (see its step 3), so
 # layout no longer depends on this flush.
 from customtkinter.windows.widgets.ctk_scrollbar import (  # noqa: E402

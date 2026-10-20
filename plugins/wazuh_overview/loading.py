@@ -9,8 +9,8 @@ when the data lands, so the ring never stalls at a fixed value.
 Colours are read from the theme at paint time, so light/dark switches are
 picked up by a plain ``update()`` with no rebuild.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

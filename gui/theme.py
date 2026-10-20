@@ -6,8 +6,8 @@ Each entry is a ``(light, dark)`` pair;
 application-wide stylesheet. A theme switch is one ``app.setStyleSheet(...)``
 call that re-polishes the whole tree atomically — no per-widget recolour walk.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 
