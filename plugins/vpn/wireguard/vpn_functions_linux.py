@@ -12,6 +12,8 @@ Licensed under the GNU General Public License v2 or later
 
 import json
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -19,11 +21,37 @@ import sys
 from gui.dialogs import CTkPasswordDialog
 from utils.i18n import get_text
 from utils.logger import logger
+from plugins.vpn.wireguard.config_validation import (
+    is_valid_config_name,
+    optional_peer_lines,
+    validate_config_name,
+    validate_server_config,
+    validate_wg_field,
+)
+from utils.settings import get_config_dir
 
 # Removed standard logging setup
 
 # Keychain Constants
-KEYS_FILE_PATH = os.path.expanduser("~/.config/resistine/keys.json")
+# Legacy plaintext key file (pre-2026.10); migrated to encrypted settings.
+KEYS_FILE_PATH = os.path.join(get_config_dir(), "keys.json")
+
+# IPv4/IPv6 addresses and domain names only (used before interpolating DNS
+# values into PostUp shell commands).
+_SAFE_DNS_TOKEN = re.compile(r"^[A-Za-z0-9.:_-]+$")
+
+
+def _restrict_dir_permissions(path):
+    """Ensure the WireGuard config dir is private (0o700).
+
+    makedirs(mode=...) is subject to the umask and does not touch an existing
+    directory, so chmod explicitly. Failures are logged, not fatal.
+    """
+    try:
+        if (os.stat(path).st_mode & 0o777) != 0o700:
+            os.chmod(path, 0o700)
+    except OSError as e:
+        logger.warning(f"Could not restrict permissions on {path}: {e}")
 
 
 def get_writable_wireguard_dir():
@@ -31,7 +59,8 @@ def get_writable_wireguard_dir():
     from utils.settings import get_config_dir
 
     wireguard_dir = os.path.join(get_config_dir(), "wireguard")
-    os.makedirs(wireguard_dir, exist_ok=True)
+    os.makedirs(wireguard_dir, mode=0o700, exist_ok=True)
+    _restrict_dir_permissions(wireguard_dir)
     return wireguard_dir
 
 
@@ -118,27 +147,6 @@ def run_privileged_command(command_args):
         return None
 
 
-def run_as_admin(file_path):
-    """
-    Attempt to elevate the script to admin privileges on Linux.
-
-    :param file_path: The path to the script file.
-    :return: True if elevation is successful, False otherwise.
-    """
-    if is_admin():
-        logger.info("Already running as root.")
-        return True
-    else:
-        logger.info("Attempting to elevate to root...")
-        result = run_privileged_command([sys.executable, file_path])
-        if result and result.returncode == 0:
-            logger.info("Elevation request accepted.")
-            return True
-        else:
-            logger.info("Elevation request denied or failed.")
-            return False
-
-
 def run_installer_as_admin(file_path):
     """
     Run an installer file with admin privileges.
@@ -197,36 +205,67 @@ def generate_wireguard_keys():
         return None
 
 
-def get_wireguard_private_key():
-    """Retrieve the WireGuard private key from the keys file."""
+def _settings():
+    from utils import settings
+    return settings
+
+
+def _migrate_legacy_keys():
+    """Move keys from the old plaintext keys.json into encrypted settings."""
+    if not os.path.exists(KEYS_FILE_PATH):
+        return
     try:
-        if os.path.exists(KEYS_FILE_PATH):
-            with open(KEYS_FILE_PATH, "r") as f:
-                keys = json.load(f)
-                return keys.get("private_key")
-        return None
+        with open(KEYS_FILE_PATH, "r") as f:
+            keys = json.load(f)
+        if keys.get("private_key") and keys.get("public_key"):
+            if not _save_secrets(keys["private_key"], keys["public_key"]):
+                return  # keep the file rather than lose the key
+        os.remove(KEYS_FILE_PATH)
+        logger.info("Moved WireGuard keys from keys.json to encrypted settings")
+    except Exception as e:
+        logger.error(f"Could not migrate legacy WireGuard keys: {e}")
+
+
+def _save_secrets(private_key, public_key):
+    s = _settings()
+    return bool(s.set_secret("wireguard", "private_key", private_key)
+                and s.set_secret("wireguard", "public_key", public_key))
+
+
+def get_wireguard_private_key():
+    """Retrieve the WireGuard private key (encrypted settings)."""
+    try:
+        _migrate_legacy_keys()
+        return _settings().get_secret("wireguard", "private_key")
     except Exception as e:
         logger.error(f"Error retrieving private key: {e}")
         return None
 
 
-def save_wireguard_keys(private_key, public_key):
-    """Save the WireGuard keys to the keys file securely."""
+def get_wireguard_public_key():
     try:
-        os.makedirs(os.path.dirname(KEYS_FILE_PATH), exist_ok=True)
-        keys = {"private_key": private_key, "public_key": public_key}
-        with open(KEYS_FILE_PATH, "w") as f:
-            json.dump(keys, f)
-        os.chmod(KEYS_FILE_PATH, 0o600)
-        return True
+        _migrate_legacy_keys()
+        return _settings().get_secret("wireguard", "public_key")
+    except Exception as e:
+        logger.error(f"Error retrieving public key: {e}")
+        return None
+
+
+def save_wireguard_keys(private_key, public_key):
+    """Save the WireGuard keys encrypted (settings secrets, keyring-backed)."""
+    try:
+        return _save_secrets(private_key, public_key)
     except Exception as e:
         logger.error(f"Error saving keys: {e}")
         return False
 
 
 def delete_wireguard_keys():
-    """Delete the WireGuard keys file."""
+    """Delete the WireGuard keys (and any legacy plaintext keys.json)."""
     try:
+        s = _settings()
+        s.delete("wireguard", "private_key")
+        s.delete("wireguard", "public_key")
         if os.path.exists(KEYS_FILE_PATH):
             os.remove(KEYS_FILE_PATH)
         return True
@@ -275,6 +314,20 @@ def parse_and_create_vpn_config(vpn_config_json_string, config_name="resistine")
             logger.error("Private key not found in keychain")
             return None
 
+        # Validate every server-provided value (and the config name, which
+        # becomes a file path) before anything is written, so a malicious API
+        # response can't inject extra lines such as PostUp into the .conf.
+        try:
+            validate_config_name(config_name)
+            validate_wg_field(private_key, "PrivateKey")
+            validate_server_config(
+                server_public_key, endpoint, client_address, allowed_ips, dns_servers
+            )
+            extra_peer_lines = optional_peer_lines(peer_config)
+        except ValueError as e:
+            logger.error(f"Rejected invalid VPN config from server: {e}")
+            return None
+
         # Convert AllowedIPs array to comma-separated string
         allowed_ips_str = (
             ", ".join(allowed_ips)
@@ -302,6 +355,8 @@ PublicKey = {server_public_key}
 AllowedIPs = {allowed_ips_str}
 Endpoint = {endpoint}
 """
+        if extra_peer_lines:
+            config_content += "\n".join(extra_peer_lines) + "\n"
 
         # Determine config path using the shared utility
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -402,10 +457,15 @@ def stop_vpn(config_path):
     """
     try:
         iface = os.path.splitext(os.path.basename(config_path))[0]
+        if not is_valid_config_name(iface):
+            logger.error(f"Refusing to stop VPN: invalid interface name {iface!r}")
+            return False
         etc_conf = f"/etc/wireguard/{iface}.conf"
         # Use interface name so AppArmor-confined wg-quick (Ubuntu) can access
         # the config; clean up the /etc/wireguard copy afterwards.
-        script = f"wg-quick down '{iface}'; rm -f '{etc_conf}'"
+        script = (
+            f"wg-quick down {shlex.quote(iface)}; rm -f {shlex.quote(etc_conf)}"
+        )
         result = run_privileged_command(["sh", "-c", script])
         return result is not None and result.returncode == 0
     except Exception as e:
@@ -445,6 +505,14 @@ def make_dns_compatible_config(config_path):
             _, _, value = line.strip().partition("=")
             dns_values = [d.strip() for d in value.replace(",", " ").split() if d.strip()]
             break
+
+    # DNS values are interpolated into root PostUp shell commands below; drop
+    # anything that is not a plain IP / domain token so a crafted config
+    # can't smuggle shell metacharacters in.
+    safe_dns = [d for d in dns_values if _SAFE_DNS_TOKEN.fullmatch(d)]
+    if len(safe_dns) != len(dns_values):
+        logger.warning("Ignoring DNS entries with unexpected characters")
+    dns_values = safe_dns
 
     # No DNS directive, or resolvconf is available -> use config as-is.
     if not dns_values or shutil.which("resolvconf"):
@@ -518,6 +586,9 @@ def start_vpn(config_path):
     """
     try:
         iface = os.path.splitext(os.path.basename(config_path))[0]
+        if not is_valid_config_name(iface):
+            logger.error(f"Refusing to start VPN: invalid interface name {iface!r}")
+            return False
         etc_conf = f"/etc/wireguard/{iface}.conf"
         # Adapt DNS handling to whatever this host provides (resolvconf vs
         # resolvectl) so wg-quick doesn't fail on a missing resolvconf.
@@ -525,9 +596,9 @@ def start_vpn(config_path):
         # Copy into /etc/wireguard/ first — Ubuntu's AppArmor profile for
         # wg-quick only permits reading configs from that directory.
         script = (
-            f"cp '{src_conf}' '{etc_conf}' && "
-            f"chmod 600 '{etc_conf}' && "
-            f"wg-quick up '{iface}'"
+            f"cp {shlex.quote(src_conf)} {shlex.quote(etc_conf)} && "
+            f"chmod 600 {shlex.quote(etc_conf)} && "
+            f"wg-quick up {shlex.quote(iface)}"
         )
         result = run_privileged_command(["sh", "-c", script])
         return result is not None and result.returncode == 0
