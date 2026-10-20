@@ -1,7 +1,7 @@
 """Theme palette + Qt stylesheet generation.
 
-Colour values are lifted verbatim from ``resources/themes/resistine_ctk.json``
-so the PyQt UI matches the original. Each entry is a ``(light, dark)`` pair;
+Colour values follow the Phoenix brand tokens (see the PALETTE comment).
+Each entry is a ``(light, dark)`` pair;
 :func:`color` resolves the active one and :func:`build_qss` emits a single
 application-wide stylesheet. A theme switch is one ``app.setStyleSheet(...)``
 call that re-polishes the whole tree atomically — no per-widget recolour walk.
@@ -13,32 +13,35 @@ Licensed under the GNU General Public License v2 or later
 
 from __future__ import annotations
 
-# name -> (light, dark). Mirrors resources/themes/resistine_ctk.json.
+# name -> (light, dark). Phoenix brand tokens: navy #0A1A33 / #0D2340
+# surfaces, #1E6FD9 deep blue accent (white text stays >= 4.5:1), #39B4F2 /
+# #5AC8FA primary/bright for highlights on dark.
 PALETTE: dict[str, tuple[str, str]] = {
-    "window_bg": ("#F5F5F7", "#111113"),
-    "card_bg": ("#FFFFFF", "#1A1A1C"),
-    "sidebar_bg": ("#FFFFFF", "#1A1A1C"),
-    "border": ("#E5E7EB", "#2A2A2C"),
-    "divider": ("#E5E7EB", "#2A2A2A"),
-    "text_primary": ("#000000", "#FFFFFF"),
-    "text_secondary": ("#6B7280", "#9CA3AF"),
-    "accent": ("#0D5394", "#2B7DE0"),
-    "accent_hover": ("#0B4578", "#1565B0"),
+    "window_bg": ("#F4F7FB", "#0A1A33"),
+    "card_bg": ("#FFFFFF", "#0D2340"),
+    "sidebar_bg": ("#FFFFFF", "#0D2340"),
+    "border": ("#DDE5EF", "#1B3558"),
+    "divider": ("#DDE5EF", "#1B3558"),
+    "text_primary": ("#0A1A33", "#FFFFFF"),
+    "text_secondary": ("#5B6B80", "#9DB3CC"),
+    "accent": ("#1E6FD9", "#1E6FD9"),
+    "accent_hover": ("#185CB5", "#2A8FE0"),
     "on_accent": ("#FFFFFF", "#FFFFFF"),
-    "sidebar_active_bg": ("#EBF0FF", "#1A2744"),
-    "sidebar_active_text": ("#0D5394", "#60A5FA"),
-    "sidebar_hover_bg": ("#F0F0F5", "#1F1F22"),
-    "input_bg": ("#FFFFFF", "#1A1A1C"),
-    "track": ("#E5E7EB", "#2A2A2C"),
+    "sidebar_active_bg": ("#E3F1FC", "#12294A"),
+    "sidebar_active_text": ("#1E6FD9", "#5AC8FA"),
+    "sidebar_hover_bg": ("#EDF3FA", "#112645"),
+    "input_bg": ("#FFFFFF", "#0D2340"),
+    "track": ("#DDE5EF", "#1B3558"),
+    "bubble_user_bg": ("#1E6FD9", "#1E6FD9"),
+    "bubble_user_text": ("#FFFFFF", "#FFFFFF"),
+    "bubble_ai_bg": ("#FFFFFF", "#0D2340"),
+    "bubble_ai_text": ("#0A1A33", "#FFFFFF"),
+    "scroll_handle": ("#AEBBCB", "#2E4A70"),
+    # Protection-status colours consumed by antivirus/wazuh_overview screens.
     "protect_ok_bg": ("#DCFCE7", "#0A2F1A"),
     "protect_ok_text": ("#15803D", "#4ADE80"),
     "protect_warn_bg": ("#FEF3C7", "#2D1F05"),
     "protect_warn_text": ("#B45309", "#FBBF24"),
-    "bubble_user_bg": ("#0D5394", "#2B7DE0"),
-    "bubble_user_text": ("#FFFFFF", "#FFFFFF"),
-    "bubble_ai_bg": ("#FFFFFF", "#1A1A1C"),
-    "bubble_ai_text": ("#000000", "#FFFFFF"),
-    "scroll_handle": ("#B0B5BD", "#555559"),
 }
 
 BADGE_BG: dict[str, tuple[str, str]] = {
@@ -99,8 +102,6 @@ def build_qss() -> str:
             f"font-size: 11px; }}"
         )
     badge_qss = "\n".join(badge_rules)
-    ok_bg, ok_fg = c("protect_ok_bg"), c("protect_ok_text")
-    warn_bg, warn_fg = c("protect_warn_bg"), c("protect_warn_text")
 
     return f"""
 * {{
@@ -110,8 +111,8 @@ def build_qss() -> str:
 }}
 QWidget {{ background-color: {c('window_bg')}; color: {c('text_primary')}; }}
 /* Labels are transparent by default — the QWidget rule above otherwise
-   cascades a window-coloured rectangle behind every label's text. Badge and
-   protection labels re-set a background via their attribute selectors, which
+   cascades a window-coloured rectangle behind every label's text. Badge
+   labels re-set a background via their attribute selectors, which
    are more specific and so win over this rule. */
 QLabel {{ background: transparent; }}
 /* Plain container widgets opt out of the window-bg fill (which would otherwise
@@ -129,14 +130,13 @@ QToolTip {{
     border-right: 1px solid {c('divider')};
 }}
 #NavButton {{
-    background-color: transparent; color: {c('text_primary')};
-    border: none; border-radius: 10px; padding: 10px 14px;
-    text-align: left; font-size: 14px;
+    background-color: transparent; border: none; border-radius: 12px;
+    padding: 0;
 }}
 #NavButton:hover {{ background-color: {c('sidebar_hover_bg')}; }}
 #NavButton:checked {{
     background-color: {c('sidebar_active_bg')};
-    color: {c('sidebar_active_text')}; font-weight: 600;
+    border-left: 3px solid {c('accent')};
 }}
 
 #Card {{
@@ -154,14 +154,26 @@ QLabel#H2 {{ font-size: 18px; font-weight: 700; }}
 QLabel#Muted {{ color: {c('text_secondary')}; }}
 QLabel#CardTitle {{ font-size: 16px; font-weight: 700; }}
 
-QLabel[protection="ok"] {{
-    background-color: {ok_bg}; color: {ok_fg};
-    border-radius: 12px; padding: 14px; font-size: 15px; font-weight: 700;
+/* Flat page kit (gui/page_kit.py) */
+QLabel#Section {{
+    color: {c('text_secondary')}; font-size: 11px; font-weight: 700;
+    letter-spacing: 1px;
 }}
-QLabel[protection="warn"] {{
-    background-color: {warn_bg}; color: {warn_fg};
-    border-radius: 12px; padding: 14px; font-size: 15px; font-weight: 700;
+QLabel#Key {{ color: {c('text_secondary')}; }}
+QLabel#Val {{ font-weight: 600; }}
+QLabel#RowTitle {{ font-size: 14px; font-weight: 600; }}
+QLabel#Hint {{ color: {c('text_secondary')}; font-size: 12px; }}
+#MenuRow {{ background: transparent; border: none; border-radius: 12px; }}
+#MenuRow:hover, #MenuRow:focus {{ background-color: {c('sidebar_hover_bg')}; }}
+QLabel#RowTitle[danger="true"] {{ color: {badge_colors('error')[1]}; }}
+QLabel#RowTitle:disabled {{ color: {c('text_secondary')}; }}
+QLabel#MenuTile {{
+    background-color: {c('sidebar_active_bg')}; border-radius: 10px;
 }}
+QPushButton#IconButton {{
+    background: transparent; border: none; border-radius: 10px; padding: 0;
+}}
+QPushButton#IconButton:hover {{ background-color: {c('sidebar_hover_bg')}; }}
 
 {badge_qss}
 

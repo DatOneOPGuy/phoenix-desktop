@@ -19,6 +19,16 @@ _initialized = False
 _authorized = False
 _delegate = None  # prevent GC of the ObjC delegate
 _THREAT_CATEGORY_ID = "THREAT_DETECTED"
+_clicks: dict = {}  # request identifier -> callback, for clicked notifications
+
+
+def _clicked(identifier) -> None:
+    fn = _clicks.pop(str(identifier), None)
+    if fn is not None:
+        try:
+            fn()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Notification click handler failed: %s", e)
 
 
 def _make_delegate():
@@ -39,6 +49,14 @@ def _make_delegate():
         ):
             handler(_PRESENT_BANNER_SOUND)
 
+        def userNotificationCenter_didReceiveNotificationResponse_withCompletionHandler_(
+            self, center, response, handler,
+        ):
+            try:
+                _clicked(response.notification().request().identifier())
+            finally:
+                handler()
+
     _Delegate.protocols = [
         objc.protocolNamed("UNUserNotificationCenterDelegate"),
     ]
@@ -56,6 +74,16 @@ def _set_auth(granted: bool, err):
         logger.debug("macOS notification authorization denied by user")
 
 
+def _in_app_bundle() -> bool:
+    """True when the process has a bundle identifier (runs from a .app)."""
+    try:
+        from Foundation import NSBundle
+
+        return bool(NSBundle.mainBundle().bundleIdentifier())
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def init():
     """Request macOS notification authorization (call once at startup).
 
@@ -67,6 +95,12 @@ def init():
     if _initialized:
         return
     _initialized = True
+    if not _in_app_bundle():
+        # Run from source (python main.py): currentNotificationCenter raises
+        # an NSException that Python cannot catch and the process aborts.
+        # send() falls back to osascript.
+        logger.info("Not running from an app bundle; notifications use osascript")
+        return
     try:
         from UserNotifications import UNUserNotificationCenter
 
@@ -89,7 +123,7 @@ def init():
         )
 
         view_action = UNNotificationAction.actionWithIdentifier_title_options_(
-            "VIEW", "View in Resistine", 1 << 2,  # foreground
+            "VIEW", "View in Phoenix", 1 << 2,  # foreground
         )
         threat_category = UNNotificationCategory.categoryWithIdentifier_actions_intentIdentifiers_options_(
             _THREAT_CATEGORY_ID, [view_action], [], 0,
@@ -101,7 +135,7 @@ def init():
         logger.warning(get_text("utils.notifications.darwin.failed_to_request_notification_authorization"), e)
 
 
-def send(title: str, body: str, urgency: str = "normal"):
+def send(title: str, body: str, urgency: str = "normal", on_click=None):
     """Send a macOS system notification. Never raises.
 
     Args:
@@ -127,8 +161,11 @@ def send(title: str, body: str, urgency: str = "normal"):
             if urgency == "critical":
                 content.setCategoryIdentifier_(_THREAT_CATEGORY_ID)
 
+            ident = str(uuid.uuid4())
+            if on_click is not None:
+                _clicks[ident] = on_click
             request = UNNotificationRequest.requestWithIdentifier_content_trigger_(
-                str(uuid.uuid4()), content, None,
+                ident, content, None,
             )
             center.addNotificationRequest_withCompletionHandler_(request, None)
             return

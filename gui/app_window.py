@@ -21,11 +21,24 @@ from __future__ import annotations
 import os
 import threading
 
-from PyQt6.QtCore import QSize, Qt, QTimer, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QIcon, QPainter, QPixmap
+from PyQt6.QtCore import (
+    QEasingCurve,
+    QPropertyAnimation,
+    QRectF,
+    QSize,
+    Qt,
+    QTimer,
+    pyqtSignal,
+    pyqtSlot,
+)
+from PyQt6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QFrame,
+    QGraphicsBlurEffect,
+    QGraphicsDropShadowEffect,
+    QGraphicsPixmapItem,
+    QGraphicsScene,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -41,10 +54,69 @@ from gui.qt_widgets import resource
 from utils.logger import logger
 from utils.i18n import get_text
 
-# Default (native) window size the app opens at, in logical pixels. Exposed as a
-# constant so width-driven UI (e.g. the vulnerabilities timeline's day-span
-# scaling) can anchor on the real opening size rather than the hard minimum.
-DEFAULT_WINDOW_SIZE = (1120, 720)
+
+# Nav icon geometry: the glyph is NAV_ICON px, drawn on a canvas padded by
+# NAV_GLOW_PAD on each side so a status glow has room around it.
+NAV_ICON = 24
+NAV_GLOW_PAD = 8
+
+# Plugin status (BasePlugin.get_status) -> glow colour; others = no glow.
+STATUS_GLOW = {
+    "OK": "#2CC985",
+    "Warning": "#FF4040",
+    "Error": "#FF4040",
+    "Critical": "#FF4040",
+}
+
+
+def _blur(img: QImage, radius: float) -> QImage:
+    scene = QGraphicsScene()
+    item = QGraphicsPixmapItem(QPixmap.fromImage(img))
+    effect = QGraphicsBlurEffect()
+    effect.setBlurRadius(radius)
+    effect.setBlurHints(QGraphicsBlurEffect.BlurHint.QualityHint)
+    item.setGraphicsEffect(effect)
+    scene.addItem(item)
+    out = QImage(img.size(), QImage.Format.Format_ARGB32_Premultiplied)
+    out.fill(0)
+    p = QPainter(out)
+    rect = QRectF(0, 0, img.width(), img.height())
+    scene.render(p, rect, rect)
+    p.end()
+    return out
+
+
+def glow_icon(icon: QIcon, color: str | None) -> QIcon:
+    """``icon`` on a padded canvas, with a soft ``color`` halo behind the
+    glyph (none when ``color`` is None) for every mode/state."""
+    from plugins.base_plugin import BasePlugin
+
+    ratio = 2.0
+    full = NAV_ICON + 2 * NAV_GLOW_PAD
+    px, pad = int(full * ratio), int(NAV_GLOW_PAD * ratio)
+    out = QIcon()
+    for mode in (QIcon.Mode.Normal, QIcon.Mode.Active):
+        for state in (QIcon.State.Off, QIcon.State.On):
+            src = icon.pixmap(QSize(NAV_ICON, NAV_ICON), ratio, mode, state)
+            src.setDevicePixelRatio(1.0)  # work in physical pixels below
+            canvas = QImage(px, px, QImage.Format.Format_ARGB32_Premultiplied)
+            canvas.fill(0)
+            p = QPainter(canvas)
+            if color and not src.isNull():
+                halo = QImage(px, px, QImage.Format.Format_ARGB32_Premultiplied)
+                halo.fill(0)
+                hp = QPainter(halo)
+                hp.drawPixmap(pad, pad, BasePlugin._tint(src, color))
+                hp.end()
+                halo = _blur(halo, 9 * ratio)
+                p.drawImage(0, 0, halo)
+                p.drawImage(0, 0, halo)  # twice: a stronger, visible glow
+            p.drawPixmap(pad, pad, src)
+            p.end()
+            pm = QPixmap.fromImage(canvas)
+            pm.setDevicePixelRatio(ratio)
+            out.addPixmap(pm, mode, state)
+    return out
 
 
 class AppWindow(QMainWindow):
@@ -69,11 +141,16 @@ class AppWindow(QMainWindow):
         self.frames: dict = {}
         self._screens: dict[str, QWidget] = {}
         self._nav_buttons: dict[str, QPushButton] = {}
+        self._nav_status: dict[str, str | None] = {}
+        self._nav_status_busy = False
+        self._nav_status_timer = QTimer(self)
+        self._nav_status_timer.setInterval(5000)
+        self._nav_status_timer.timeout.connect(self._refresh_nav_status)
         self.current_frame_name = ""
         self._current_main_screen = None
 
         self.setWindowTitle(get_text("main.app_title"))
-        self.resize(*DEFAULT_WINDOW_SIZE)
+        self.resize(1120, 720)
         self.setMinimumSize(820, 480)
         icon_png = resource("resources", "icons", "app_icon.png")
         if os.path.isfile(icon_png):
@@ -86,6 +163,19 @@ class AppWindow(QMainWindow):
         except Exception:
             saved_mode = "System"
         self.apply_theme(self._resolve_mode(saved_mode))
+
+    def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        # When a system tray is active (Windows), closing the window hides it
+        # to the tray instead of quitting — only the tray's Quit truly exits.
+        tray = getattr(self, "_tray", None)
+        if tray is not None:
+            try:
+                if tray.on_window_close():
+                    event.ignore()
+                    return
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"close-to-tray failed, closing normally: {e}")
+        super().closeEvent(event)
 
     # ===================================================================
     #  Plugin manager
@@ -158,116 +248,169 @@ class AppWindow(QMainWindow):
         self.setCentralWidget(root)
 
     # ---- Sidebar ----------------------------------------------------------
+    # Icon-only rail: the plugin name is the tooltip and accessible name.
+    SIDEBAR_WIDTH = 76
+
     def _build_sidebar(self, layout: QHBoxLayout) -> None:
         self.sidebar = QFrame()
         self.sidebar.setObjectName("Sidebar")
-        self.sidebar.setFixedWidth(250)
+        self.sidebar.setFixedWidth(self.SIDEBAR_WIDTH)
         sb = QVBoxLayout(self.sidebar)
-        sb.setContentsMargins(12, 20, 12, 16)
-        sb.setSpacing(4)
+        sb.setContentsMargins(12, 18, 12, 16)
+        sb.setSpacing(6)
+        sb.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
-        sb.addWidget(self._logo_widget())
-        divider = QFrame()
-        divider.setFixedHeight(1)
-        divider.setObjectName("Divider")
-        sb.addSpacing(8)
-        sb.addWidget(divider)
-        sb.addSpacing(8)
+        sb.addWidget(self._logo_widget(), 0, Qt.AlignmentFlag.AlignHCenter)
+        sb.addSpacing(14)
 
         self._nav_group = QButtonGroup(self)
         self._nav_group.setExclusive(True)
+        bottom = []
         for p in self.plugins:
-            if p.order <= 0 or p.order == -1:
-                continue  # Login (0) and explicitly-hidden (-1) plugins
-            btn = QPushButton(f"  {p.get_display_name()}")
+            if p.order <= 0 or getattr(p, "hidden", False):
+                continue  # Login (0), explicitly-hidden (-1) and hidden plugins
+            btn = QPushButton()
             btn.setObjectName("NavButton")
             btn.setCheckable(True)
+            btn.setFixedSize(52, 48)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setIconSize(QSize(20, 20))
-            btn.setIcon(p.get_icon())
+            size = NAV_ICON + 2 * NAV_GLOW_PAD
+            btn.setIconSize(QSize(size, size))
+            btn.setIcon(self._nav_icon(p))
+            btn.setToolTip(p.get_display_name())
+            btn.setAccessibleName(p.get_display_name())
             btn.clicked.connect(
                 lambda _=False, n=p.get_name(): self.select_frame_by_name(
                     f"frame_{n}"))
             self._nav_group.addButton(btn)
             self._nav_buttons[p.get_name()] = btn
             p.set_button(btn)
-            sb.addWidget(btn)
+            # Help + Settings (order >= 1000) sit at the bottom of the rail.
+            if p.order >= 1000:
+                bottom.append(btn)
+            else:
+                sb.addWidget(btn, 0, Qt.AlignmentFlag.AlignHCenter)
 
         sb.addStretch(1)
-        version = QLabel(get_text("gui.app_window.resistine_desktop"))
-        version.setObjectName("Muted")
-        version.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        sb.addWidget(version)
+        for btn in bottom:
+            sb.addWidget(btn, 0, Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(self.sidebar)
+        self._nav_status = {}
+        self._refresh_nav_status()
+        self._nav_status_timer.start()
+
+    # ---- Nav status glow --------------------------------------------------
+    def _nav_icon(self, plugin) -> QIcon:
+        """The plugin's nav icon with a glow in its status colour."""
+        status = self._nav_status.get(plugin.get_name())
+        return glow_icon(plugin.get_nav_icon(), STATUS_GLOW.get(status))
+
+    def _refresh_nav_status(self) -> None:
+        """Read plugin statuses off the GUI thread (some checks shell out),
+        then repaint only the icons whose status changed."""
+        if self._nav_status_busy:
+            return
+        plugins = [self._plugin_by_name(n) for n in self._nav_buttons]
+        plugins = [p for p in plugins if p is not None]
+        if not plugins:
+            return
+        self._nav_status_busy = True
+
+        def work():
+            statuses = {}
+            for p in plugins:
+                try:
+                    statuses[p.get_name()] = p.get_status()
+                except Exception:  # noqa: BLE001
+                    statuses[p.get_name()] = None
+            self.after(0, lambda: self._apply_nav_status(statuses))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _apply_nav_status(self, statuses: dict) -> None:
+        self._nav_status_busy = False
+        for name, status in statuses.items():
+            if self._nav_status.get(name, "?") == status:
+                continue
+            self._nav_status[name] = status
+            btn = self._nav_buttons.get(name)
+            plugin = self._plugin_by_name(name)
+            if btn is None or plugin is None:
+                continue
+            try:
+                btn.setIcon(self._nav_icon(plugin))
+            except RuntimeError:  # sidebar rebuilt meanwhile
+                pass
 
     def _logo_widget(self) -> QWidget:
-        # Primary: the blue "Resistine" wordmark banner (4:1). Shown in the
-        # sidebar across the whole app; the shield mark stays reserved for
-        # the login flow / setup wizard.
-        wordmark_path = resource("resources", "icons", "ResistineWordmark.png")
-        svg_path = resource("resources", "icons", "ResistineLogo.svg")
-        png_path = resource("resources", "icons", "ResistineLogoWhiteText.png")
+        # The square Phoenix app mark (same art as the login screen). It
+        # doubles as the protection indicator: see set_protection_status().
         label = QLabel()
-        # Centered in the sidebar.
-        label.setAlignment(Qt.AlignmentFlag.AlignHCenter
-                           | Qt.AlignmentFlag.AlignVCenter)
-
-        # The logo art is a 4:1 banner. Render at 2x and tag the device pixel
-        # ratio so it stays crisp on Retina displays.
-        w, h, radius = 200, 50, 12
-        pm = None
-        if os.path.isfile(wordmark_path):
-            pm = QPixmap(wordmark_path).scaled(
-                w * 2, h * 2, Qt.AspectRatioMode.IgnoreAspectRatio,
-                Qt.TransformationMode.SmoothTransformation)
-            if not pm.isNull():
-                # Square corners by design — the wordmark banner is shown
-                # as-is (no rounded clip).
-                pm.setDevicePixelRatio(2.0)
-                label.setPixmap(pm)
-                return label
-            pm = None
-        try:
-            if os.path.isfile(svg_path):
-                from PyQt6.QtSvg import QSvgRenderer
-                renderer = QSvgRenderer(svg_path)
-                pm = QPixmap(QSize(w, h))
-                pm.fill(Qt.GlobalColor.transparent)
-                painter = QPainter(pm)
-                renderer.render(painter)
-                painter.end()
-        except Exception:
-            pm = None
-        if (pm is None or pm.isNull()) and os.path.isfile(png_path):
-            pm = QPixmap(png_path).scaled(
-                w, h, Qt.AspectRatioMode.IgnoreAspectRatio,
-                Qt.TransformationMode.SmoothTransformation)
-
-        if pm is not None and not pm.isNull():
-            label.setPixmap(self._round_pixmap(pm, radius))
-            return label
-
-        label.setText(get_text("main.app_title"))
-        label.setStyleSheet(
-            f"font-size: 20px; font-weight: 800; color: {theme.color('accent')};")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setToolTip("Phoenix")
+        self._logo = label
+        self._logo_anim = None
+        size = 44
+        path = resource("resources", "icons", "PhoenixMark.png")
+        pm = QPixmap(path) if os.path.isfile(path) else QPixmap()
+        if not pm.isNull():
+            ratio = 2.0
+            pm = pm.scaled(int(size * ratio), int(size * ratio),
+                           Qt.AspectRatioMode.KeepAspectRatio,
+                           Qt.TransformationMode.SmoothTransformation)
+            pm.setDevicePixelRatio(ratio)
+            label.setPixmap(pm)
+        else:
+            label.setText("P")
+            label.setStyleSheet(
+                f"font-size: 24px; font-weight: 800; color: {theme.color('accent')};")
+        self._apply_logo_glow()
         return label
 
-    @staticmethod
-    def _round_pixmap(src: QPixmap, radius: int) -> QPixmap:
-        """Clip a pixmap to a rounded rectangle (restores the CTk logo's
-        rounded corners)."""
-        from PyQt6.QtGui import QPainterPath
-        out = QPixmap(src.size())
-        out.fill(Qt.GlobalColor.transparent)
-        p = QPainter(out)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        path = QPainterPath()
-        path.addRoundedRect(
-            0.0, 0.0, float(src.width()), float(src.height()), radius, radius)
-        p.setClipPath(path)
-        p.drawPixmap(0, 0, src)
-        p.end()
-        return out
+    # Glow colour per protection state; None (unknown) = no glow.
+    _GLOW = {"ok": "#2CC985", "error": "#FF4040"}
+
+    def set_protection_status(self, state: str | None) -> None:
+        """Make the sidebar logo glow green ("ok") or red ("error")."""
+        if state == getattr(self, "_protection", None):
+            return
+        self._protection = state
+        self._apply_logo_glow()
+
+    def _apply_logo_glow(self) -> None:
+        label = getattr(self, "_logo", None)
+        if label is None:
+            return
+        if self._logo_anim is not None:
+            self._logo_anim.stop()
+            self._logo_anim = None
+        state = getattr(self, "_protection", None)
+        colour = self._GLOW.get(state)
+        try:
+            if colour is None:
+                label.setGraphicsEffect(None)
+                label.setToolTip("Phoenix")
+                return
+            glow = QGraphicsDropShadowEffect(label)
+            glow.setOffset(0, 0)
+            glow.setColor(QColor(colour))
+            glow.setBlurRadius(22)
+            label.setGraphicsEffect(glow)
+            label.setToolTip("Phoenix — protected" if state == "ok"
+                             else "Phoenix — not protected")
+            if state == "error":
+                # Unprotected: a slow breathing pulse to draw the eye.
+                anim = QPropertyAnimation(glow, b"blurRadius", label)
+                anim.setDuration(2400)
+                anim.setStartValue(10.0)
+                anim.setKeyValueAt(0.5, 30.0)
+                anim.setEndValue(10.0)
+                anim.setEasingCurve(QEasingCurve.Type.InOutSine)
+                anim.setLoopCount(-1)
+                anim.start()
+                self._logo_anim = anim
+        except RuntimeError:  # logo deleted by a shell rebuild
+            self._logo = None
 
     # ===================================================================
     #  Navigation
@@ -293,7 +436,7 @@ class AppWindow(QMainWindow):
                 screen = plugin.create_main_screen()
             except Exception as e:
                 logger.error(f"Error building screen for {name}: {e}")
-                self.show_notification(get_text("gui.app_window.error_loading_name_e", name=name, e=e), "error")
+                self.show_notification(f"Error loading {name}: {e}", "error")
                 return
             self._screens[name] = screen
             self.stack.addWidget(screen)
@@ -325,7 +468,7 @@ class AppWindow(QMainWindow):
                 names.add(p.get_name())
                 btn = self._nav_buttons.get(p.get_name())
                 if btn is not None:
-                    btn.setIcon(p.get_icon())
+                    btn.setIcon(self._nav_icon(p))
         for n in names:
             self._rebuild_screen(n)
 
@@ -368,7 +511,7 @@ class AppWindow(QMainWindow):
         for name, btn in self._nav_buttons.items():
             p = self._plugin_by_name(name)
             if p is not None:
-                btn.setIcon(p.get_icon())
+                btn.setIcon(self._nav_icon(p))
             try:
                 btn.setAttribute(
                     Qt.WidgetAttribute.WA_UnderMouse, False)
@@ -393,7 +536,7 @@ class AppWindow(QMainWindow):
         # use the PALETTE — which otherwise follows the macOS system
         # appearance. With system-dark + app-light that leaked as black
         # bands/strips in light mode wherever QSS doesn't reach.
-        from PyQt6.QtGui import QColor, QPalette
+        from PyQt6.QtGui import QPalette
         pal = QPalette()
         window = QColor(theme.color("window_bg"))
         base = QColor(theme.color("card_bg"))
