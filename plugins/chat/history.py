@@ -5,7 +5,6 @@ import time
 import uuid
 
 from utils import settings
-from utils.i18n import get_text
 
 _NS = "chat_history"
 _TITLE_LEN = 40
@@ -104,7 +103,7 @@ class ChatHistoryManager:
         """Create a new empty session and return its metadata."""
         meta = {
             "id": uuid.uuid4().hex[:12],
-            "title": get_text("chat.history.new_chat"),
+            "title": "New Chat",
             "created_at": time.time(),
             "updated_at": time.time(),
         }

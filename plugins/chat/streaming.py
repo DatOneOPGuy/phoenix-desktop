@@ -1,7 +1,9 @@
 """Stream controller for chat API responses.
 
 Encapsulates the background-thread + queue.Queue + Tk polling pattern used
-to stream OpenAI-compatible chat completions without blocking the GUI.
+to stream OpenAI-compatible chat completions without blocking the GUI. A
+non-HTTP transport (plugins/chat/matrix_transport.py) plugs into the same
+pipeline by exposing ``stream_deltas()``.
 """
 
 from __future__ import annotations
@@ -13,7 +15,6 @@ import time
 from typing import TYPE_CHECKING, Callable
 
 from utils.logger import logger
-from utils.i18n import get_text
 
 if TYPE_CHECKING:
     from openai import OpenAI
@@ -78,7 +79,7 @@ class StreamController:
         endpoint could not be reached).
         """
         if self._active:
-            logger.warning(get_text("chat.streaming.streamcontroller_start_called_while_already"))
+            logger.warning("StreamController.start() called while already active")
             return
 
         self._active = True
@@ -91,11 +92,14 @@ class StreamController:
         self._queue = queue.Queue(maxsize=4096)
         self._stream = None
 
-        thread = threading.Thread(
-            target=self._worker,
-            args=(client, model, messages, temperature, extra_body, base_url),
-            daemon=True,
-        )
+        # A transport (Matrix) yields text deltas itself; anything else is an
+        # OpenAI SDK client. Both feed the same queue → poll → callbacks path.
+        if hasattr(client, "stream_deltas"):
+            target, args = self._worker_transport, (client, messages, extra_body)
+        else:
+            target = self._worker
+            args = (client, model, messages, temperature, extra_body, base_url)
+        thread = threading.Thread(target=target, args=args, daemon=True)
         thread.start()
         self._schedule_poll()
 
@@ -267,6 +271,18 @@ class StreamController:
 
         except Exception as e:
             elapsed = time.monotonic() - t0
+            # Cancellation teardown, not a failure. cancel() closes the HTTP
+            # response from another thread, so the read we were blocked on
+            # blows up mid-flight — on Windows as WinError 10038 ("not a
+            # socket"), elsewhere as a generic ReadError. That's expected when
+            # the user switches sessions / leaves chat / the stream is stopped;
+            # surface it as a clean cancel, not a red error the user sees.
+            if self._cancel_event.is_set():
+                logger.debug(
+                    f"[CHAT-STREAM] stream cancelled during teardown after "
+                    f"{elapsed:.2f}s ({type(e).__name__})")
+                self._safe_put(("cancel", _CANCELLED))
+                return
             raw = re.sub(r'sk-[A-Za-z0-9]+', 'sk-***', str(e))
             status = getattr(e, "status_code", None)
             try:
@@ -278,22 +294,61 @@ class StreamController:
 
             if is_conn:
                 msg = (
-                    get_text("chat.streaming.could_not_reach_endpoint_check", endpoint=endpoint)
+                    f"Could not reach {endpoint}. "
+                    "Check that the host is reachable (VPN, DNS, firewall) "
+                    "and the URL in Settings is correct."
                 )
             elif status == 403 or "not authorized" in raw or "no agent" in raw:
                 # The dashboard authorizes chat by the caller's source IP —
                 # it must map to an enrolled agent. "no agent found" means the
                 # IP the server sees has no registered endpoint agent.
                 msg = (
-                    get_text("chat.streaming.this_device_isn_t_authorized", raw=raw)
+                    "This device isn't authorized for chat yet: the server "
+                    "found no enrolled agent for your current IP. Make sure "
+                    "the VPN is on and the endpoint agent is enrolled/running, "
+                    f"then retry. (server said: {raw})"
                 )
             else:
-                msg = get_text("chat.streaming.raw_endpoint_endpoint", raw=raw, endpoint=endpoint)
+                msg = f"{raw} (endpoint: {endpoint})"
 
             logger.error(
                 f"[CHAT-STREAM] ✗ error after {elapsed:.2f}s"
                 f"{f' (HTTP {status})' if status else ''}: {msg}")
             self._safe_put(("error", msg))
+
+    def _worker_transport(self, transport, messages: list[dict],
+                          extra_body: dict | None) -> None:
+        """Run one turn through a non-HTTP transport (Matrix).
+
+        The transport owns the server-side history (like the HTTPS agent
+        endpoint), so only the newest user message is sent, plus the session.
+        """
+        t0 = time.monotonic()
+        session = (extra_body or {}).get("session_id")
+        text = messages[-1]["content"] if messages else ""
+        logger.info(f"[CHAT-STREAM] → {transport.describe()} session={session}")
+        n_chunks = n_chars = 0
+        try:
+            for delta in transport.stream_deltas(text, session, self._cancel_event):
+                if self._cancel_event.is_set():
+                    break
+                n_chunks += 1
+                n_chars += len(delta)
+                self._safe_put(("chunk", delta))
+            if self._cancel_event.is_set():
+                self._safe_put(("cancel", _CANCELLED))
+                return
+            logger.info(
+                f"[CHAT-STREAM] ✓ done: {n_chunks} updates, {n_chars} chars "
+                f"in {time.monotonic() - t0:.2f}s")
+            self._safe_put(("done", _DONE))
+        except Exception as e:
+            if self._cancel_event.is_set():
+                self._safe_put(("cancel", _CANCELLED))
+                return
+            logger.error(
+                f"[CHAT-STREAM] ✗ error after {time.monotonic() - t0:.2f}s: {e}")
+            self._safe_put(("error", str(e)))
 
     def _safe_put(self, item: tuple[str, object]) -> None:
         """Bounded put that yields to the cancel signal on a full queue.

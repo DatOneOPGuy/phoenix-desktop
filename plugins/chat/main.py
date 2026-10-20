@@ -1,9 +1,9 @@
-"""Resistine AI Chat plugin (PyQt6).
+"""Phoenix AI Chat plugin (PyQt6).
 
 Faithful PyQt6 port of the original CustomTkinter chat screen. Reproduces the
 same regions 1:1:
 
-  * Top bar  -- hamburger menu toggle (left), "Resistine AI" title (centre),
+  * Top bar  -- hamburger menu toggle (left), "Phoenix AI" title (centre),
                 "+" New Chat button (right).
   * History drawer -- a collapsible left panel listing saved sessions with
                 select + delete, slid open/closed by the hamburger, dimming the
@@ -14,7 +14,7 @@ same regions 1:1:
   * Welcome screen -- centred greeting + "TRY ASKING" suggestion chips when the
                 conversation is empty (or an "API key required" panel when no
                 client is configured).
-  * Input bar -- rounded entry "Message Resistine AI..." + a send button that
+  * Input bar -- rounded entry "Message Phoenix AI..." + a send button that
                 shows "↑" and toggles to a red "■" stop glyph while streaming.
 
 The streaming controller, history manager and markdown utilities are reused
@@ -27,10 +27,10 @@ Licensed under the GNU General Public License v2 or later
 from __future__ import annotations
 
 import os
-import random
 
 from PyQt6.QtCore import (
     QEasingCurve,
+    QObject,
     QPropertyAnimation,
     QSize,
     Qt,
@@ -56,24 +56,25 @@ from PyQt6.QtWidgets import (
 
 from gui import theme
 from plugins.base_plugin import BasePlugin
+from plugins.chat import siem_alerts
 from plugins.chat.history import ChatHistoryManager
 from plugins.chat.qt_markdown import markdown_to_html, stylesheet
 from plugins.chat.streaming import StreamController
-from plugins.chat.suggestions import SUGGESTION_POOL
-from utils import settings
+from plugins.chat.suggestions import pick_suggestions
+from utils import chat_config, settings
 from utils.logger import logger
-from utils.i18n import get_text
 
 # Appended to history when the user navigates away mid-response: the partial
 # text is discarded and this canned marker is stored instead.
 _NAV_AWAY_MSG = (
-    get_text("chat.you_switched_chats_before_this")
+    "_(You switched chats before this response could finish. "
+    "Please ask your question again.)_"
 )
 
 _SYSTEM_PROMPT = "You are SOC Copilot specialized in cybersecurity."
 _ICON_DIR = os.path.dirname(os.path.realpath(__file__))
 _SYS_MSG = {"role": "system", "content": _SYSTEM_PROMPT}
-_DEFAULT_BASE_URL = "https://dashboard.resisti.net:8002/v1"
+_DEFAULT_BASE_URL = chat_config.DEFAULT_BASE_URL
 
 # Thinking spinner (braille) shown while waiting for the first token, ported
 # in spirit from the CustomTkinter build's AssistantBubble. Suppressed when
@@ -91,12 +92,13 @@ _ARRIVE_MS = 200
 def _tls_verify() -> str | bool:
     """httpx ``verify`` value for the HTTPS chat endpoint.
 
-    The dashboard serves a leaf-only certificate (no intermediate) signed
-    by the internal Resistine root CA, so the default certifi store cannot
-    validate it. Resolution order: RESISTINE_CA_BUNDLE env var, a
-    ``certs/resistine-rootCA.pem`` override in the config dir, then the
-    root CA bundled with the app. If all are missing (shouldn't happen --
-    the bundled cert ships in resources/), fall back to standard
+    The dashboard's certificate is signed either by the internal Resistine
+    root CA (leaf-only, no intermediate) or by the Cloudflare Origin CA
+    (*.phoenix.exposed). Neither is in certifi, so the app ships both roots
+    in ``resources/certs/chat-ca-bundle.pem``. Resolution order:
+    RESISTINE_CA_BUNDLE env var, a ``certs/resistine-rootCA.pem`` override in
+    the config dir, then the bundled CA file. If all are missing (shouldn't
+    happen -- the bundle ships in resources/), fall back to standard
     verification rather than disabling it.
     """
     ca = os.environ.get("RESISTINE_CA_BUNDLE")
@@ -107,14 +109,14 @@ def _tls_verify() -> str | bool:
     if os.path.isfile(ca):
         return ca
     from utils.functions import get_resource_path
-    ca = get_resource_path(
-        os.path.join("resources", "certs", "resistine-rootCA.pem"))
-    if os.path.isfile(ca):
-        return ca
+    for name in ("chat-ca-bundle.pem", "resistine-rootCA.pem"):
+        ca = get_resource_path(os.path.join("resources", "certs", name))
+        if os.path.isfile(ca):
+            return ca
     return True
 
-RESISTINE_BLUE = "#0D5394"
-_ACCENT_HOVER = "#1565B0"
+BRAND_BLUE = "#1E6FD9"
+_ACCENT_HOVER = "#185CB5"
 _STOP_RED = "#EF4444"
 _STOP_RED_HOVER = "#DC2626"
 
@@ -248,7 +250,7 @@ class _Bubble(QFrame):
 
     def _build_copy_button(self) -> QPushButton:
         muted = theme.color("text_secondary")
-        btn = QPushButton(get_text("chat.copy"))
+        btn = QPushButton("⧉  Copy")
         btn.setObjectName("ChatCopyBtn")
         btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn.setFlat(True)
@@ -268,10 +270,18 @@ class _Bubble(QFrame):
         QApplication.clipboard().setText(self._raw_text)
         if self._copy_btn is None:
             return
-        self._copy_btn.setText(get_text("chat.copied"))
-        QTimer.singleShot(
-            1500,
-            lambda: self._copy_btn and self._copy_btn.setText(get_text("chat.copy")))
+        self._copy_btn.setText("✓  Copied")
+        QTimer.singleShot(1500, self._reset_copy_label)
+
+    def _reset_copy_label(self) -> None:
+        # Fires 1.5s later — the bubble may have been torn down by then, in
+        # which case _copy_btn is a live Python wrapper around a deleted C++
+        # object (truthy, but setText raises). Guard both.
+        try:
+            if self._copy_btn is not None:
+                self._copy_btn.setText("⧉  Copy")
+        except RuntimeError:
+            pass
 
     # -- hover: fade the copy button in/out --------------------------------
 
@@ -299,7 +309,7 @@ class _Bubble(QFrame):
         if self._copy_row is None:
             return
         muted = theme.color("text_secondary")
-        btn = QPushButton(get_text("chat.retry"))
+        btn = QPushButton("↻  Retry")
         btn.setObjectName("ChatRetryBtn")
         btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn.setFlat(True)
@@ -330,9 +340,15 @@ class _Bubble(QFrame):
     def _render_thinking(self) -> None:
         frame = _SPINNER_FRAMES[self._spinner_idx % len(_SPINNER_FRAMES)]
         muted = theme.color("text_secondary")
-        self._view.setHtml(
-            f'<span style="color:{muted}; font-style:italic;">'
-            f"Thinking &nbsp; {frame}</span>")
+        try:
+            self._view.setHtml(
+                f'<span style="color:{muted}; font-style:italic;">'
+                f"Thinking &nbsp; {frame}</span>")
+        except RuntimeError:
+            # View deleted while the spinner timer was still pending — stop
+            # ticking so it can't fire against the dead object again.
+            self._end_thinking()
+            return
         self._fit_height()
 
     def _tick_spinner(self) -> None:
@@ -354,17 +370,26 @@ class _Bubble(QFrame):
         differently than it renders and clips the last line. A one-line
         floor + bottom padding covers block margins and descenders.
         """
-        doc = self._view.document()
-        doc.setTextWidth(self._max_width)
-        line = self._view.fontMetrics().lineSpacing()
-        h = max(doc.size().height(), line)
-        self._view.setFixedHeight(int(h) + 8)
+        try:
+            doc = self._view.document()
+            doc.setTextWidth(self._max_width)
+            line = self._view.fontMetrics().lineSpacing()
+            h = max(doc.size().height(), line)
+            self._view.setFixedHeight(int(h) + 8)
+        except RuntimeError:
+            # The browser's C++ object was deleted (chat cleared/rebuilt or
+            # session switched) while a deferred relayout was still pending.
+            pass
 
     def set_text(self, text: str, *, streaming: bool = False) -> None:
         del streaming  # accepted for call-site clarity; no behavioural effect
         if self._is_user:
             self._raw_text = text
-            self._label.setText(text)
+            try:
+                self._label.setText(text)
+                self._fit_user_width()
+            except RuntimeError:
+                pass
             return
         # Assistant: strip the leading whitespace the backend sometimes emits
         # (renders as a first-line indent), then render styled HTML.
@@ -372,18 +397,44 @@ class _Bubble(QFrame):
         self._raw_text = text
         if self._thinking and text:
             self._end_thinking()
-        self._view.setHtml(markdown_to_html(text) if text else "")
+        try:
+            self._view.setHtml(markdown_to_html(text) if text else "")
+        except RuntimeError:
+            # Browser deleted mid-stream (session switched / chat torn down).
+            return
         self._fit_height()
         if text and text != "…":
             self._has_content = True  # enables copy + hover reveal
 
+    def _fit_user_width(self) -> None:
+        """Size the user pill to its text, up to ``_max_width``.
+
+        A word-wrapped QLabel's size hint is a narrow heuristic width, not
+        the room available, so short and medium messages wrapped into a
+        thin column. Pin the width to the longest line (plus a little
+        slack for rounding), capped by the bubble's max width; longer text
+        then wraps at the full width.
+        """
+        self._label.ensurePolished()  # stylesheet font (14px) before measuring
+        fm = self._label.fontMetrics()
+        lines = self._raw_text.splitlines() or [""]
+        natural = max(fm.horizontalAdvance(line) for line in lines) + 4
+        self._label.setFixedWidth(max(1, min(natural, self._max_width)))
+
     def set_max_width(self, max_width: int) -> None:
         self._max_width = max_width
-        if self._is_user:
-            self._label.setMaximumWidth(max_width)
-        else:
-            self._view.setFixedWidth(max_width)
-            self._fit_height()
+        try:
+            if self._is_user:
+                self._label.setMaximumWidth(max_width)
+                self._fit_user_width()
+            else:
+                self._view.setFixedWidth(max_width)
+                self._fit_height()
+        except RuntimeError:
+            # Bubble's underlying C++ widget was deleted while a resize/
+            # relayout (e.g. _apply_bubble_widths on a chat-area resize) was
+            # still iterating stale rows. Nothing to size — ignore.
+            pass
 
 
 class _BubbleRow(QWidget):
@@ -509,6 +560,19 @@ class _ChatInput(QTextEdit):
 # Plugin
 # ---------------------------------------------------------------------------
 
+class _AlertBridge(QObject):
+    """Carries a SIEM alert from the Matrix thread to the Qt thread (the
+    signal is emitted there and delivered queued to the GUI-thread slot)."""
+
+    arrived = pyqtSignal(dict)
+
+
+def _alert_markdown(alert: dict) -> str:
+    import time as _time
+    when = _time.strftime("%Y-%m-%d %H:%M", _time.localtime(alert.get("ts") or 0))
+    return f"**🚨 SIEM alert** · {when}\n\n{alert.get('body', '')}"
+
+
 class Plugin(BasePlugin):
     """Chat plugin -- lets users talk to an OpenAI-compatible AI assistant."""
 
@@ -517,7 +581,7 @@ class Plugin(BasePlugin):
     def __init__(self, app):
         super().__init__(
             id="002", version="2025.01.01", order=2, name="Chat", status=None,
-            description=get_text("chat.this_plugin_allows_you_to"),
+            description="Ask the Phoenix AI security assistant.",
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Chat", "ES": "Chat", "FR": "Chat"},
             icon_light_path=os.path.join(_ICON_DIR, "chat_light.png"),
@@ -539,6 +603,12 @@ class Plugin(BasePlugin):
         self._gate_timer = None
         self._current_asst_bubble: _Bubble | None = None
         self._welcome_widget: QWidget | None = None
+        # SIEM alerts view (plugins/chat/siem_alerts.py): a read-only list of
+        # the alerts siemgent sent this user, shown in place of a chat.
+        self._viewing_alerts = False
+        self._alerts_bridge = _AlertBridge()
+        self._alerts_bridge.arrived.connect(self._on_alert_arrived)
+        siem_alerts.subscribe(self._alerts_bridge.arrived.emit)
         self.reinitialize_client()
         self.status = self.get_status()
         active_id = self._history.get_active_id()
@@ -555,36 +625,41 @@ class Plugin(BasePlugin):
     def check_status(self):
         if not self.client:
             return "Warning"
-        # Access gate: chat is only usable when VPN + agent are both active.
-        vpn_on, agent_on = self._chat_access_status()
-        return "OK" if (vpn_on and agent_on) else "Warning"
+        # Access gate: chat is only usable while the endpoint agent runs.
+        return "OK" if self._chat_access_status() else "Warning"
 
     @staticmethod
-    def _chat_access_status() -> tuple[bool, bool]:
-        """Return (vpn_connected, endpoint_agent_running) for the gate.
+    def _chat_access_status() -> bool:
+        """Return whether the endpoint (SIEM) agent is running.
 
-        The agent check is "running" (not merely "installed") so that
-        manually toggling the SIEM agent off re-locks chat.
+        The check is "running" (not merely "installed") so that manually
+        toggling the SIEM agent off re-locks chat. The VPN is not required.
         """
-        vpn_on = False
-        try:
-            from plugins.vpn.main import is_vpn_connected
-            vpn_on = bool(is_vpn_connected())
-        except Exception:
-            vpn_on = False
-        agent_on = False
         try:
             from plugins.wazuh.main import is_agent_running
-            agent_on = bool(is_agent_running())
+            return bool(is_agent_running())
         except Exception:
-            agent_on = False
-        return vpn_on, agent_on
+            return False
 
     def reinitialize_client(self, notify: bool = False):
-        """Rebuild the OpenAI client from the current settings."""
+        """Rebuild the chat client (OpenAI API or Matrix) from settings."""
+        self.transport = settings.get("chat", "transport") or "openai"
+        if self.transport == "matrix":
+            self._init_matrix_client()
+            try:
+                self._sync_input_enabled()
+            except Exception:
+                pass
+            return
+        try:
+            from plugins.chat import matrix_transport
+            matrix_transport.shutdown_service()
+            # SIEM alerts still come over Matrix: keep an alerts-only session.
+            matrix_transport.ensure_alerts_listener()
+        except Exception:
+            pass
         api_key = settings.get_secret("chat", "openai_api_key")
-        self.base_url = (
-            settings.get("chat", "openai_base_url") or _DEFAULT_BASE_URL)
+        self.base_url = chat_config.base_url()
         self.session_id = None
         if self.base_url:
             self.model, self.conversation_history = "ministral-3:14b", []
@@ -610,7 +685,7 @@ class Plugin(BasePlugin):
             if notify:
                 try:
                     self.app.show_notification(
-                        get_text("chat.chat_init_error_e", e=e), type="error")
+                        f"Chat Init Error: {e}", type="error")
                 except Exception:
                     pass
             self.client = None
@@ -620,19 +695,48 @@ class Plugin(BasePlugin):
         except Exception:
             pass
 
+    def _init_matrix_client(self) -> None:
+        """Matrix transport: the assistant is a bot in an encrypted DM.
+
+        Like the HTTPS agent endpoint, the server keeps the history, so the
+        plugin runs in "server-side agent" mode: ``base_url`` is truthy (only
+        the new message is sent, no local system prompt) and names the bot.
+        """
+        from plugins.chat import matrix_transport
+        bot = settings.get("chat", "matrix_bot") or matrix_transport.DEFAULT_BOT
+        self.base_url = f"matrix:{bot}"
+        self.session_id = None
+        self.model = "matrix"
+        self.conversation_history = []
+        self.client = None
+        # Why there is no client: shown on the chat screen instead of a guess.
+        self._matrix_problem = "unavailable"
+        try:
+            from plugins.login import oidc
+            if not matrix_transport.available():
+                logger.error("Chat: Matrix transport selected but matrix-nio[e2e] is not installed")
+            elif not oidc.has_session():
+                logger.info("Chat: Matrix transport needs a Phoenix sign-in")
+                self._matrix_problem = "signin"
+            else:
+                self.client = matrix_transport.MatrixTransport(bot)
+                self._matrix_problem = None
+                # Connect now so SIEM alerts arrive without a chat message first.
+                matrix_transport.start_background(bot)
+        except Exception as e:
+            logger.error(f"Chat: Matrix transport init failed: {e}")
+
     # ===================================================================
     #  Screen construction
     # ===================================================================
     def create_main_screen(self):
-        # Access gate: chat is only available when the VPN is connected AND
-        # the SIEM/Endpoint agent is RUNNING. A QTimer poller re-checks while
-        # the screen is alive, so toggling the agent off or dropping the VPN
-        # snaps chat back to the locked screen — and turning them back on
-        # unlocks it — without navigating away and back.
-        vpn_on, agent_on = self._chat_access_status()
-        self._gate_unlocked = bool(vpn_on and agent_on)
+        # Access gate: chat is only available while the SIEM/Endpoint agent
+        # is RUNNING. A QTimer poller re-checks while the screen is alive, so
+        # toggling the agent off snaps chat back to the locked screen — and
+        # turning it back on unlocks it — without navigating away and back.
+        self._gate_unlocked = self._chat_access_status()
         if not self._gate_unlocked:
-            locked = self._build_locked_screen(vpn_on, agent_on)
+            locked = self._build_locked_screen()
             self._start_gate_poller(locked)
             self.second_frame = locked
             return locked
@@ -671,7 +775,7 @@ class Plugin(BasePlugin):
 
     # ---- Access gate -------------------------------------------------------
     def _start_gate_poller(self, owner: QWidget) -> None:
-        """Re-check the VPN+agent gate every few seconds while chat is shown.
+        """Re-check the agent gate every few seconds while chat is shown.
 
         The QTimer is parented to the screen widget, so it stops and is
         destroyed with the screen — no manual teardown needed.
@@ -680,8 +784,7 @@ class Plugin(BasePlugin):
         timer.setInterval(4000)
 
         def _tick():
-            vpn_on, agent_on = self._chat_access_status()
-            unlocked = bool(vpn_on and agent_on)
+            unlocked = self._chat_access_status()
             if unlocked == self._gate_unlocked:
                 return
             timer.stop()
@@ -701,13 +804,13 @@ class Plugin(BasePlugin):
         timer.start()
         self._gate_timer = timer
 
-    def _build_locked_screen(self, vpn_on: bool, agent_on: bool) -> QWidget:
+    def _build_locked_screen(self) -> QWidget:
         """Referral screen shown while the access gate is locked."""
         page = QWidget()
         lay = QVBoxLayout(page)
         lay.addStretch(1)
 
-        title = QLabel(get_text("chat.resistine_ai_is_locked"))
+        title = QLabel("Phoenix AI is locked")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet(
             f"font-size: 20px; font-weight: 700; "
@@ -716,7 +819,7 @@ class Plugin(BasePlugin):
         lay.addSpacing(8)
 
         sub = QLabel(
-            get_text("chat.chat_is_available_when_your"))
+            "Chat is available while the Endpoint agent is running.")
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sub.setStyleSheet(
             f"font-size: 14px; color: {theme.color('text_secondary')};")
@@ -724,19 +827,15 @@ class Plugin(BasePlugin):
         lay.addWidget(sub)
         lay.addSpacing(16)
 
-        for ok, txt in (
-            (vpn_on, "VPN connected"),
-            (agent_on, "Endpoint agent running"),
-        ):
-            row = QLabel(("✓  " if ok else "✗  ") + txt)
-            row.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            color = "#1E8E3E" if ok else "#C5221F"
-            row.setStyleSheet(f"font-size: 14px; color: {color};")
-            lay.addWidget(row)
+        row = QLabel("✗  Endpoint agent running")
+        row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        row.setStyleSheet("font-size: 14px; color: #C5221F;")
+        lay.addWidget(row)
 
         lay.addSpacing(16)
         hint = QLabel(
-            get_text("chat.connect_the_vpn_and_start"))
+            "Start the Endpoint agent to unlock chat. "
+            "This screen unlocks automatically.")
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hint.setWordWrap(True)
         hint.setStyleSheet(
@@ -759,7 +858,7 @@ class Plugin(BasePlugin):
         lay.addWidget(self._toggle_btn)
 
         lay.addStretch(1)
-        title = QLabel(get_text("chat.chat_ui.resistine_ai"))
+        title = QLabel("Phoenix AI")
         title.setStyleSheet(
             f"font-size: 16px; font-weight: 700; "
             f"color: {theme.color('text_primary')}; background: transparent;")
@@ -865,7 +964,7 @@ class Plugin(BasePlugin):
         row.setSpacing(6)
 
         self.chat_entry = _ChatInput()
-        self.chat_entry.setPlaceholderText(get_text("chat.chat_ui.message_resistine_ai"))
+        self.chat_entry.setPlaceholderText("Message Phoenix AI...")
         self.chat_entry.setStyleSheet(
             "QTextEdit { background: transparent; border: none; "
             "font-size: 15px; padding: 4px 8px; }")
@@ -925,7 +1024,7 @@ class Plugin(BasePlugin):
             size, pad = 13, "0px"
         else:
             # Bigger, semi-bold arrow, nudged up 2px to optically centre it.
-            bg, hover, text = RESISTINE_BLUE, _ACCENT_HOVER, "↑"
+            bg, hover, text = BRAND_BLUE, _ACCENT_HOVER, "↑"
             size, pad = 20, "0px 0px 2px 0px"
         self.send_button.setText(text)
         self.send_button.setStyleSheet(
@@ -955,16 +1054,16 @@ class Plugin(BasePlugin):
 
         hdr = QHBoxLayout()
         hdr.setContentsMargins(4, 0, 0, 0)
-        title = QLabel(get_text("chat.history"))
+        title = QLabel("HISTORY")
         title.setStyleSheet(
             "font-size: 10px; font-weight: 700; color: #6B7280; "
             "background: transparent;")
         hdr.addWidget(title)
         hdr.addStretch(1)
-        new_btn = QPushButton(get_text("chat.new"))
+        new_btn = QPushButton("+ New")
         new_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         new_btn.setStyleSheet(
-            f"QPushButton {{ background-color: {RESISTINE_BLUE}; color: #fff; "
+            f"QPushButton {{ background-color: {BRAND_BLUE}; color: #fff; "
             f"border: none; border-radius: 7px; padding: 5px 10px; "
             f"font-size: 11px; font-weight: 700; }}"
             f"QPushButton:hover {{ background-color: {_ACCENT_HOVER}; }}")
@@ -997,20 +1096,22 @@ class Plugin(BasePlugin):
             w = item.widget()
             if w is not None:
                 w.deleteLater()
+        lay.insertWidget(0, self._alerts_sidebar_item())
         sessions = self._history.list_sessions()
-        active_id = self._history.get_active_id()
+        active_id = (None if getattr(self, "_viewing_alerts", False)
+                     else self._history.get_active_id())
         if not sessions:
-            empty = QLabel(get_text("chat.no_conversations"))
+            empty = QLabel("No conversations")
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             empty.setStyleSheet(
                 "color: #6B7280; font-size: 12px; background: transparent;")
-            lay.insertWidget(0, empty)
+            lay.insertWidget(1, empty)
             return
         for s in sessions:
             lay.insertWidget(
                 lay.count() - 1,
                 self._sidebar_item(
-                    s["id"], s.get("title", get_text("chat.history.new_chat")),
+                    s["id"], s.get("title", "New Chat"),
                     s["id"] == active_id))
 
     def _sidebar_item(self, sid: str, title: str, active: bool) -> QWidget:
@@ -1060,7 +1161,7 @@ class Plugin(BasePlugin):
             QStyle.StandardPixmap.SP_TitleBarCloseButton))
         del_btn.setIconSize(QSize(12, 12))
         del_btn.setFixedSize(24, 24)
-        del_btn.setToolTip(get_text("chat.delete_chat"))
+        del_btn.setToolTip("Delete chat")
         del_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         del_btn.setStyleSheet(
             "QPushButton { background: transparent; border: none; "
@@ -1070,6 +1171,87 @@ class Plugin(BasePlugin):
         del_btn.clicked.connect(lambda _=False, s=sid: self._delete_chat(s))
         rl.addWidget(del_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         return row
+
+    def _alerts_sidebar_item(self) -> QWidget:
+        is_dark = theme.is_dark()
+        active_bg = "#1A2F45" if is_dark else "#D6E4F0"
+        row = QFrame()
+        row.setObjectName("ChatAlertsItem")
+        bgrule = f"background-color: {active_bg};" if self._viewing_alerts else ""
+        row.setStyleSheet(
+            f"#ChatAlertsItem {{ {bgrule} border-radius: 8px; }}"
+            f"#ChatAlertsItem:hover {{ background-color: {theme.color('sidebar_hover_bg')}; }}")
+        row.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        row.mousePressEvent = lambda _e: self._show_alerts()
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(8, 6, 8, 6)
+        unread = siem_alerts.store().unread
+        lbl = QLabel("🚨  SIEM alerts")
+        lbl.setStyleSheet(
+            f"color: {theme.color('text_primary')}; font-size: 12px; "
+            f"font-weight: 700; background: transparent;")
+        rl.addWidget(lbl, 1)
+        if unread:
+            badge = QLabel(str(unread))
+            badge.setStyleSheet(
+                f"background-color: {_STOP_RED}; color: #fff; border-radius: 8px; "
+                "padding: 1px 6px; font-size: 10px; font-weight: 700;")
+            rl.addWidget(badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        return row
+
+    def _show_alerts(self) -> None:
+        """Replace the conversation with the read-only SIEM alerts list."""
+        self._finalize_in_flight_response(persist=True)
+        self._save_current_session()
+        self._viewing_alerts = True
+        self._clear_messages()
+        alerts = siem_alerts.store().all()
+        if not alerts:
+            self._add_assistant_bubble(
+                md="**🚨 SIEM alerts**\n\nNo alerts yet. Alerts about machines you own "
+                   "will appear here.")
+        for alert in alerts:
+            self._add_assistant_bubble(md=_alert_markdown(alert))
+        siem_alerts.store().mark_read()
+        self._refresh_sidebar()
+        self._sync_input_enabled()
+
+    _ASK_LIMIT = 8000  # characters of alert text sent with "Ask AI"
+
+    def ask_about_alert(self, body: str) -> bool:
+        """Start a new chat asking Phoenix AI about one SIEM alert (the
+        Dashboard's alert page). False when the AI is not set up."""
+        if self.client is None:
+            return False
+        if getattr(self, "chat_entry", None) is None:
+            return False
+        self._new_chat()
+        text = (body or "").strip()
+        if len(text) > self._ASK_LIMIT:
+            text = text[: self._ASK_LIMIT] + "\n…(alert shortened)"
+        self._use_suggestion(
+            "Explain this Phoenix SIEM alert in plain words: what happened, how "
+            "serious it is, and what I should do now.\n\n" + text)
+        return True
+
+    def _on_alert_arrived(self, alert: dict) -> None:
+        """GUI thread: a new SIEM alert was received."""
+        try:  # the parsed one-line title, not the raw markdown
+            from plugins.dashboard import alerts as recent_alerts
+            first = recent_alerts.parse(alert.get("body") or "")["title"]
+        except Exception:  # noqa: BLE001
+            first = ""
+        try:
+            self.app.show_notification(f"🚨 SIEM alert: {first}", type="warning")
+        except Exception:
+            pass
+        try:
+            if self._viewing_alerts and getattr(self, "_messages_lay", None) is not None:
+                self._add_assistant_bubble(md=_alert_markdown(alert))
+                siem_alerts.store().mark_read()
+            self._refresh_sidebar()
+        except RuntimeError:
+            pass  # the chat screen was torn down; the store still has the alert
 
     def _toggle_sidebar(self) -> None:
         self._sidebar_visible = not self._sidebar_visible
@@ -1114,14 +1296,15 @@ class Plugin(BasePlugin):
         lay.setSpacing(4)
         lay.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
-        greeting = QLabel(get_text("chat.how_can_i_help_you"))
+        greeting = QLabel("How can I help you today?")
         greeting.setAlignment(Qt.AlignmentFlag.AlignCenter)
         greeting.setStyleSheet(
             f"font-size: 24px; font-weight: 700; "
             f"color: {theme.color('text_primary')}; background: transparent;")
         lay.addWidget(greeting)
 
-        subtitle = QLabel(get_text("chat.ask_me_anything_about_cybersecurity"))
+        subtitle = QLabel(
+            "Ask about your devices, alerts, vulnerabilities and compliance")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle.setStyleSheet(
             f"font-size: 14px; color: {theme.color('text_secondary')}; "
@@ -1129,15 +1312,14 @@ class Plugin(BasePlugin):
         lay.addWidget(subtitle)
         lay.addSpacing(14)
 
-        section = QLabel(get_text("chat.try_asking"))
+        section = QLabel("TRY ASKING")
         section.setStyleSheet(
-            f"font-size: 11px; font-weight: 700; color: {RESISTINE_BLUE}; "
+            f"font-size: 11px; font-weight: 700; color: {BRAND_BLUE}; "
             f"background: transparent;")
         lay.addWidget(section)
         lay.addSpacing(8)
 
-        for suggestion in random.sample(
-                SUGGESTION_POOL, min(4, len(SUGGESTION_POOL))):
+        for suggestion in pick_suggestions(4):
             lay.addWidget(self._suggestion_chip(suggestion))
         return w
 
@@ -1147,7 +1329,7 @@ class Plugin(BasePlugin):
         card_bg = theme.color("card_bg")
         card_hover = theme.color("sidebar_hover_bg")
         chip_fg = theme.color("text_primary")
-        chip = QPushButton(get_text("chat.text", text=text))
+        chip = QPushButton(f"  ●   {text}")
         chip.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         chip.setMinimumWidth(360)
         chip.setStyleSheet(
@@ -1175,14 +1357,27 @@ class Plugin(BasePlugin):
             f"background: transparent;")
         lay.addWidget(icon)
 
-        title = QLabel(get_text("chat.api_key_required"))
+        matrix = getattr(self, "transport", "openai") == "matrix"
+        signin = getattr(self, "_matrix_problem", None) == "signin"
+        title = QLabel(
+            ("Sign-in Required" if signin else "Matrix Chat Unavailable")
+            if matrix else "API Key Required")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet(
             f"font-size: 20px; font-weight: 700; "
             f"color: {theme.color('text_primary')}; background: transparent;")
         lay.addWidget(title)
 
-        desc = QLabel(get_text("chat.add_an_api_key_in"))
+        if not matrix:
+            text = "Add an API key in Settings to start chatting."
+        elif signin:
+            text = "Sign in with your Phoenix account, or switch the transport in Settings."
+        else:
+            text = "This build lacks Matrix encryption support. Switch the transport in Settings."
+        desc = QLabel(text)
+        # A word-wrapped label in a centered layout gets a too-small height
+        # for its line count (text was clipped); give it room to stay short.
+        desc.setMinimumWidth(460)
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
         desc.setWordWrap(True)
         desc.setStyleSheet(
@@ -1191,7 +1386,7 @@ class Plugin(BasePlugin):
         lay.addWidget(desc)
         lay.addSpacing(12)
 
-        btn = QPushButton(get_text("antivirus.qt_ui.open_settings"))
+        btn = QPushButton("Open Settings")
         btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn.clicked.connect(self._open_settings)
         lay.addWidget(btn, 0, Qt.AlignmentFlag.AlignCenter)
@@ -1256,13 +1451,6 @@ class Plugin(BasePlugin):
                 self._messages_lay.count() - 1, self._bottom_spacer)
             idx = self._messages_lay.indexOf(self._bottom_spacer)
         self._messages_lay.insertWidget(idx, row)
-
-    def _scroll_to_bottom(self) -> None:
-        try:
-            bar = self._scroll.verticalScrollBar()
-            QTimer.singleShot(0, lambda: bar.setValue(bar.maximum()))
-        except Exception:
-            pass
 
     def _pin_row_to_top(self, row: QWidget) -> None:
         """Scroll so *row* sits at the top of the viewport (Claude-style).
@@ -1355,7 +1543,8 @@ class Plugin(BasePlugin):
         self._rebuild_chat()
 
     def _select_chat(self, session_id: str) -> None:
-        if session_id == self._history.get_active_id():
+        if (session_id == self._history.get_active_id()
+                and not getattr(self, "_viewing_alerts", False)):
             return
         self._finalize_in_flight_response(persist=True)
         self._save_current_session()
@@ -1382,6 +1571,13 @@ class Plugin(BasePlugin):
 
     def _rebuild_chat(self) -> None:
         """Clear and repopulate the message area for the active session."""
+        self._viewing_alerts = False
+        self._clear_messages()
+        self._restore_history()
+        self._refresh_sidebar()
+        self._sync_input_enabled()
+
+    def _clear_messages(self) -> None:
         if self._stream_ctrl and self._stream_ctrl.is_active:
             self._stream_ctrl.cancel()
         self._current_asst_bubble = None
@@ -1397,8 +1593,6 @@ class Plugin(BasePlugin):
                 self._messages_lay.takeAt(i)
                 w.deleteLater()
         self._bottom_spacer.setFixedHeight(0)
-        self._restore_history()
-        self._refresh_sidebar()
 
     # ===================================================================
     #  Sending / streaming
@@ -1412,7 +1606,7 @@ class Plugin(BasePlugin):
         if len(user_text) > 15000:
             try:
                 self.app.show_notification(
-                    get_text("chat.message_too_long_15_000"),
+                    "Message too long (15,000 character limit).",
                     type="warning")
             except Exception:
                 pass
@@ -1456,8 +1650,11 @@ class Plugin(BasePlugin):
             on_done=self._on_stream_done, on_error=self._on_stream_error)
         msgs = ([{"role": "user", "content": user_text}]
                 if self.base_url else list(self.conversation_history))
-        extra = ({"session_id": self.session_id}
-                 if self.base_url and self.session_id else None)
+        # The server keeps the conversation per session, so every turn of a
+        # chat must carry the same id: the local chat id is that id.
+        session = self.session_id or self._history.get_active_id()
+        extra = ({"session_id": session}
+                 if self.base_url and session else None)
         self._last_payload = (msgs, extra)  # kept for error-bubble Retry
         try:
             self._stream_ctrl.start(
@@ -1509,7 +1706,7 @@ class Plugin(BasePlugin):
                 self._response_persisted = True
                 try:
                     self.app.show_notification(
-                        get_text("chat.the_server_returned_an_empty"),
+                        "The server returned an empty response.",
                         type="warning")
                 except Exception:
                     pass
@@ -1535,7 +1732,7 @@ class Plugin(BasePlugin):
                 {"role": "assistant", "content": self._accumulated_text})
             try:
                 self.app.show_notification(
-                    get_text("chat.response_may_be_incomplete"), type="warning")
+                    "Response may be incomplete.", type="warning")
             except Exception:
                 pass
         elif self._current_asst_bubble is not None:
@@ -1616,13 +1813,23 @@ class Plugin(BasePlugin):
         btn = getattr(self, "send_button", None)
         if entry is None or btn is None:
             return
-        if self.client is None:
+        if getattr(self, "_viewing_alerts", False):
             entry.setEnabled(False)
-            entry.setPlaceholderText(get_text("chat.chat_ui.api_key_required_see_settings"))
+            entry.setPlaceholderText("SIEM alerts are read-only — pick a chat to talk to Phoenix AI")
+            btn.setEnabled(False)
+        elif self.client is None:
+            entry.setEnabled(False)
+            if getattr(self, "transport", "openai") != "matrix":
+                hint = "API key required — see Settings"
+            elif getattr(self, "_matrix_problem", None) == "signin":
+                hint = "Sign in with your Phoenix account to use Matrix chat"
+            else:
+                hint = "Matrix chat is not available in this build"
+            entry.setPlaceholderText(hint)
             btn.setEnabled(False)
         else:
             entry.setEnabled(True)
-            entry.setPlaceholderText(get_text("chat.chat_ui.message_resistine_ai"))
+            entry.setPlaceholderText("Message Phoenix AI...")
             # Disabled-when-empty: only enable if there's content to send.
             btn.setEnabled(bool(entry.text().strip()))
 
@@ -1657,6 +1864,9 @@ class Plugin(BasePlugin):
 
     def destroy(self) -> None:
         """Plugin teardown — cancel any in-flight stream and flush state."""
+        bridge = getattr(self, "_alerts_bridge", None)
+        if bridge is not None:
+            siem_alerts.unsubscribe(bridge.arrived.emit)
         try:
             self._finalize_in_flight_response(persist=True)
         except Exception:

@@ -10,7 +10,6 @@ from plugins.chat.fonts import _BASE_SIZE, RESISTINE_BLUE, get_theme_colors, ui_
 from plugins.chat.markdown_renderer import MarkdownRenderer
 from plugins.chat.markdown_utils import strip_streaming_md
 from utils.logger import logger
-from utils.i18n import get_text
 
 # Streaming widget choice: CTkLabel + wraplength. Earlier this used tk.Text
 # with insert("end", delta) for O(delta) per-chunk cost, but tk.Text's
@@ -33,22 +32,6 @@ from utils.i18n import get_text
 # rather than re-computing wraplength against a growing string.
 _THINK_SPINNER = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 _THINK_FRAME_MS = 80
-
-
-def _logical_px(widget, px: int) -> int:
-    """Convert a PHYSICAL-pixel size to the LOGICAL units a CTk widget's
-    configure values expect (mirrors markdown_renderer._logical_px).
-
-    max_width comes from _available_width() — canvas.winfo_width(), physical
-    px — but CTkLabel re-multiplies wraplength by the widget scaling, so
-    passing it straight double-scales and the streamed text clips at the
-    right edge on HiDPI. Returns ``px`` unchanged at 100%.
-    """
-    try:
-        s = customtkinter.ScalingTracker.get_widget_scaling(widget)
-        return int(round(px / s)) if s else px
-    except Exception:
-        return px
 
 
 class AssistantBubble(customtkinter.CTkFrame):
@@ -148,8 +131,7 @@ class AssistantBubble(customtkinter.CTkFrame):
         """
         self._streaming_label = customtkinter.CTkLabel(
             self, text="", fg_color="transparent",
-            text_color=self._bubble_fg,
-            wraplength=_logical_px(self, self._max_width),
+            text_color=self._bubble_fg, wraplength=self._max_width,
             font=customtkinter.CTkFont(
                 family=ui_family(), size=_BASE_SIZE),
             justify="left", anchor="nw",
@@ -231,7 +213,7 @@ class AssistantBubble(customtkinter.CTkFrame):
                 self._is_dark, self._max_width)
         except Exception as exc:
             logger.warning(
-                get_text("chat.markdown_bubble.markdownrenderer_failed_using_fallback_exc", exc=exc))
+                f"MarkdownRenderer failed, using fallback: {exc}")
             from plugins.chat.markdown_bubble import MarkdownBubble
             self._renderer = MarkdownBubble(
                 self._content_frame, markdown_text, width=self._max_width)
@@ -245,7 +227,7 @@ class AssistantBubble(customtkinter.CTkFrame):
         (body text, tables and code) to the clipboard at once. Uses the app's
         blue (RESISTINE_BLUE) so it's clearly visible and on-brand."""
         self._copy_btn = customtkinter.CTkButton(
-            self, text=get_text("chat.assistant_bubble.copy"), width=58, height=24, corner_radius=6,
+            self, text="Copy", width=58, height=24, corner_radius=6,
             fg_color=RESISTINE_BLUE, hover_color="#1565B0", text_color="#FFFFFF",
             font=customtkinter.CTkFont(family=ui_family(), size=12),
             command=self._copy_response,
@@ -256,12 +238,12 @@ class AssistantBubble(customtkinter.CTkFrame):
         try:
             self.clipboard_clear()
             self.clipboard_append(getattr(self, "_markdown_text", "") or "")
-            self._copy_btn.configure(text=get_text("chat.assistant_bubble.copied"))
+            self._copy_btn.configure(text="Copied!")
 
             def _restore():
                 try:
                     if self._copy_btn.winfo_exists():
-                        self._copy_btn.configure(text=get_text("chat.assistant_bubble.copy"))
+                        self._copy_btn.configure(text="Copy")
                 except Exception:
                     pass
             self.after(1200, _restore)
@@ -298,8 +280,7 @@ class AssistantBubble(customtkinter.CTkFrame):
         self._max_width = max_width
         if self._streaming_label is not None:
             try:
-                self._streaming_label.configure(
-                    wraplength=_logical_px(self, max_width))
+                self._streaming_label.configure(wraplength=max_width)
             except Exception:
                 pass
         if self._renderer is not None \

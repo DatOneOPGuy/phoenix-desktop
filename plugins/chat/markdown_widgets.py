@@ -25,7 +25,6 @@ from plugins.chat.markdown_bubble import (
     _EMOJI_RE, _EMOJI_RENDER, MarkdownBubble, attach_emoji_copy,
 )
 from utils.logger import logger
-from utils.i18n import get_text
 
 
 def _cell_has_emoji(text: str) -> bool:
@@ -250,6 +249,22 @@ class SelectableLabel(tk.Text):
             return None
         return "break"
 
+    def _display_lines(self) -> int:
+        """Number of display lines the text occupies.
+
+        Tk's ``count -displaylines`` reports the number of line *breaks*
+        between the two indices (N-1 for N display lines), so it reads one
+        short. Add 1 to get the real line count — without this, every
+        multi-line message rendered one line too short (and the old ``or 1``
+        only happened to mask the single-line case).
+        """
+        try:
+            result = self.count("1.0", "end-1c", "displaylines")
+            n = result[0] if isinstance(result, (list, tuple)) else result
+            return (int(n) + 1) if n is not None else 1
+        except Exception:
+            return 1
+
     def _autoheight(self, _event=None) -> None:
         if self._in_autoheight:
             return
@@ -432,7 +447,7 @@ class CodeBlockWidget(customtkinter.CTkFrame):
             self._copy_btn.configure(text="Copied!")
             self.after(1200, lambda: self._copy_btn.configure(text="Copy"))
         except Exception as exc:
-            logger.warning(get_text("chat.markdown_widgets.clipboard_copy_failed_exc", exc=exc))
+            logger.warning(f"Clipboard copy failed: {exc}")
             self._copy_btn.configure(text="Failed")
             self.after(1200, lambda: self._copy_btn.configure(text="Copy"))
 
@@ -656,16 +671,7 @@ class TableWidget(customtkinter.CTkFrame):
             except Exception:
                 lh = 17
             content = self._num_rows * (lh + 11)
-        # The scrollbar is a CTk widget (height=10 LOGICAL → 20+ physical px
-        # at 200%), and this method returns PHYSICAL px, so budget it scaled
-        # — the fixed physical _SB_H under-budgeted on HiDPI and clipped the
-        # last table row. Mirrors CodeBlockWidget's scaled scrollbar budget.
-        try:
-            sb_h = int(self._SB_H
-                       * customtkinter.ScalingTracker.get_widget_scaling(self))
-        except Exception:
-            sb_h = self._SB_H
-        return int(content) + (sb_h if self._scrollbar_visible else 0)
+        return int(content) + (self._SB_H if self._scrollbar_visible else 0)
 
     def _apply_initial_height(self) -> None:
         try:

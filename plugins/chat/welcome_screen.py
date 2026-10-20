@@ -7,10 +7,24 @@ from typing import Callable
 
 import customtkinter
 
-from plugins.chat.fonts import RESISTINE_BLUE, ui_family, widget_scale
+from plugins.chat.fonts import RESISTINE_BLUE, ui_family
 
-from plugins.chat.suggestions import SUGGESTION_POOL  # noqa: F401
-from utils.i18n import get_text
+# Pool of suggestion prompts shown on the welcome screen.
+# 4 are picked at random each time the chat is opened.
+SUGGESTION_POOL = [
+    "Explain what a zero-day exploit is",
+    "How do I harden my Linux server?",
+    "Analyze a suspicious network log",
+    "What are common phishing indicators?",
+    "How does a man-in-the-middle attack work?",
+    "What is the MITRE ATT&CK framework?",
+    "Explain the difference between IDS and IPS",
+    "How do I set up a firewall with iptables?",
+    "What are best practices for password security?",
+    "How do I detect lateral movement in a network?",
+    "Explain DNS tunneling and how to detect it",
+    "What is ransomware and how do I prevent it?",
+]
 
 def _secondary_color(is_dark: bool) -> str:
     return "#9CA3AF" if is_dark else "#6B7280"
@@ -49,7 +63,7 @@ class WelcomeScreen(customtkinter.CTkFrame):
         # Greeting
         greeting_label = customtkinter.CTkLabel(
             self,
-            text=get_text("chat.how_can_i_help_you"),
+            text="How can I help you today?",
             font=customtkinter.CTkFont(
                 family=ui_family(), size=24, weight="bold"),
             text_color=fg_color,
@@ -58,7 +72,7 @@ class WelcomeScreen(customtkinter.CTkFrame):
 
         subtitle_label = customtkinter.CTkLabel(
             self,
-            text=get_text("chat.ask_me_anything_about_cybersecurity"),
+            text="Ask me anything about cybersecurity",
             font=customtkinter.CTkFont(family=ui_family(), size=14),
             text_color=secondary,
         )
@@ -69,30 +83,12 @@ class WelcomeScreen(customtkinter.CTkFrame):
             SUGGESTION_POOL, min(4, len(SUGGESTION_POOL))
         )
 
-        # Measure longest text to set uniform chip width. The chip label
-        # renders in CTkFont(size=16) — PIXEL size, times widget scaling —
-        # so measure with the same scaled pixel font (negative size = px;
-        # a positive 16 would be POINTS, i.e. DPI-dependent) and divide back
-        # to LOGICAL units, since CTkFrame width is re-multiplied by the
-        # scaling. Identical at 100% (scale == 1, px == pt on Tk default).
+        # Measure longest text to set uniform chip width
         import tkinter.font as tkfont
-        _s = widget_scale(self)
-        measure_font = tkfont.Font(
-            family=ui_family(), size=-int(round(16 * _s)))
+        measure_font = tkfont.Font(family=ui_family(), size=16)
         longest_px = max(measure_font.measure(s) for s in suggestions)
-        # dot(16+18) + text + arrow(20+18) + padding — logical units
-        chip_width = int(round(longest_px / _s)) + 100
-        # Clamp to the available chat width so a long suggestion can never
-        # push the chips off-screen. The scroll frame may not be laid out
-        # yet (width 1); fall back to the toplevel, minus sidebar/padding.
-        try:
-            avail = master.winfo_width()
-            if avail <= 1:
-                avail = master.winfo_toplevel().winfo_width() - 120
-        except Exception:
-            avail = 0
-        if avail > 1:
-            chip_width = min(chip_width, max(240, int(avail / _s) - 40))
+        # dot(16+18) + text + arrow(20+18) + padding
+        chip_width = longest_px + 100
 
         # Container for TRY ASKING + chips, centered
         chips_box = customtkinter.CTkFrame(
@@ -100,7 +96,7 @@ class WelcomeScreen(customtkinter.CTkFrame):
         chips_box.pack(pady=0)
 
         section_label = customtkinter.CTkLabel(
-            chips_box, text=get_text("chat.try_asking"),
+            chips_box, text="TRY ASKING",
             font=customtkinter.CTkFont(
                 family=ui_family(), size=11, weight="bold"),
             text_color=RESISTINE_BLUE, anchor="w",
@@ -187,7 +183,7 @@ class ApiKeyMissingScreen(customtkinter.CTkFrame):
 
         title_label = customtkinter.CTkLabel(
             self,
-            text=get_text("chat.api_key_required"),
+            text="API Key Required",
             font=customtkinter.CTkFont(family=ui_family(), size=20, weight="bold"),
             text_color="#ffffff" if is_dark else "#000000",
         )
@@ -195,7 +191,7 @@ class ApiKeyMissingScreen(customtkinter.CTkFrame):
 
         desc_label = customtkinter.CTkLabel(
             self,
-            text=get_text("chat.welcome_screen.add_your_openai_api_key"),
+            text="Add your OpenAI API key in Settings to start chatting.",
             font=customtkinter.CTkFont(family=ui_family(), size=14),
             text_color=secondary,
         )
@@ -203,7 +199,7 @@ class ApiKeyMissingScreen(customtkinter.CTkFrame):
 
         settings_btn = customtkinter.CTkButton(
             self,
-            text=get_text("antivirus.qt_ui.open_settings"),
+            text="Open Settings",
             font=customtkinter.CTkFont(family=ui_family(), size=13, weight="bold"),
             fg_color=RESISTINE_BLUE,
             hover_color="#1565B0",
@@ -254,7 +250,7 @@ class ChatLockedScreen(customtkinter.CTkFrame):
 
         title_label = customtkinter.CTkLabel(
             self,
-            text=get_text("chat.welcome_screen.secure_chat_locked"),
+            text="Secure Chat Locked",
             font=customtkinter.CTkFont(
                 family=ui_family(), size=22, weight="bold"),
             text_color=fg,
@@ -263,7 +259,8 @@ class ChatLockedScreen(customtkinter.CTkFrame):
 
         desc_label = customtkinter.CTkLabel(
             self,
-            text=(get_text("chat.welcome_screen.chat_is_only_available_on")),
+            text=("Chat is only available on a protected device.\n"
+                  "Connect the VPN and install the Endpoint agent to continue."),
             font=customtkinter.CTkFont(family=ui_family(), size=14),
             text_color=secondary,
             justify="center",

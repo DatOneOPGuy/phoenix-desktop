@@ -10,14 +10,12 @@ import customtkinter
 
 from plugins.chat.assistant_bubble import AssistantBubble
 from plugins.chat.bubble import BubbleRow, UserBubble, assistant_width, user_width
-from plugins.chat.fonts import (
-    RESISTINE_BLUE, _is_dark_mode, ui_family, widget_scale)
+from plugins.chat.fonts import RESISTINE_BLUE, _is_dark_mode, ui_family
 from plugins.chat.sidebar import ChatSidebar
 from plugins.chat.welcome_screen import (
     ApiKeyMissingScreen, ChatLockedScreen, WelcomeScreen)
 from utils.emoji_entry import EmojiEntry
 from utils.logger import logger
-from utils.i18n import get_text
 
 # Opacity of the layer that dims the chat behind the open history drawer.
 # 0 = invisible, 1 = solid black; this is the "slightly darker" look.
@@ -223,9 +221,9 @@ class ChatUIMixin:
                 unlocked = self._gate_unlocked
             if unlocked != self._gate_unlocked:
                 logger.info(
-                    f"Chat access gate changed: "
-                    f"unlocked={self._gate_unlocked} -> {unlocked} "
-                    f"(vpn={vpn_on}, agent={agent_on})")
+                    "Chat access gate changed: unlocked=%s -> %s "
+                    "(vpn=%s, agent=%s)",
+                    self._gate_unlocked, unlocked, vpn_on, agent_on)
                 self._gate_unlocked = unlocked
                 # create_main_screen re-runs the gate and restarts the poller.
                 self._refresh_gate_screen()
@@ -406,14 +404,6 @@ class ChatUIMixin:
             if self._sidebar is None or not self._sidebar.winfo_ismapped():
                 return
             self._sync_drawer_geometry()
-            # If the dim never made it up (e.g. _set_chat_dim ran at <Map>
-            # time while second_frame was still 1x1 and the positioning
-            # bailed), retry the full show path now that real geometry
-            # exists — otherwise the dim stays absent until a manual toggle.
-            if self._sidebar_visible and not getattr(
-                    self, "_ov_mapped", False):
-                self._set_chat_dim(True)
-                return
             # Re-size + reposition the dim Toplevel for the new chat-area
             # bounds. _position_dim_overlay short-circuits if nothing
             # actually changed since the last call, so the Configure burst
@@ -622,7 +612,7 @@ class ChatUIMixin:
         bar.place(relx=0.5, rely=1.0, anchor="s", relwidth=0.96, y=-14)
         bar.grid_columnconfigure(0, weight=1)
         self.chat_entry = EmojiEntry(
-            bar, placeholder_text=get_text("chat.chat_ui.message_resistine_ai"),
+            bar, placeholder_text="Message Phoenix AI...",
             corner_radius=20, border_width=0, height=44,
             font=customtkinter.CTkFont(family=ui_family(), size=16),
             fg_color="transparent", text_color=fg,
@@ -640,7 +630,7 @@ class ChatUIMixin:
         if self.client is None:
             self.chat_entry.configure(
                 state="disabled",
-                placeholder_text=get_text("chat.chat_ui.api_key_required_see_settings"))
+                placeholder_text="API key required \u2014 see Settings")
             self.send_button.configure(state="disabled", fg_color="#6B7280")
 
     def _build_overlay_buttons(self, is_dark: bool) -> None:
@@ -664,7 +654,7 @@ class ChatUIMixin:
         self._toggle_btn.grid(row=0, column=0, padx=(12, 0), pady=4)
 
         self._header_label = customtkinter.CTkLabel(
-            header, text=get_text("chat.chat_ui.resistine_ai"),
+            header, text="Phoenix AI",
             font=customtkinter.CTkFont(
                 family=ui_family(), size=16, weight="bold"),
             text_color=fg, fg_color="transparent")
@@ -711,27 +701,6 @@ class ChatUIMixin:
         # the dim Toplevel sits above the chat content.
         try:
             self._sidebar.lift()
-        except Exception:
-            pass
-        # _set_chat_dim ran BEFORE the drawer mapped, so the overlay was
-        # positioned from the _WIDTH fallback rather than the drawer's real
-        # winfo width. Re-position once, after idle (when the drawer has
-        # mapped), so the overlay snaps to the actual drawer edge.
-        try:
-            self.second_frame.after_idle(self._reposition_dim_after_show)
-        except Exception:
-            pass
-
-    def _reposition_dim_after_show(self) -> None:
-        """One-shot dim-overlay correction after the drawer maps."""
-        if not getattr(self, "_sidebar_visible", False):
-            return
-        # Invalidate the geometry caches — the fallback-derived geometry may
-        # equal the fresh one numerically but was computed from stale inputs.
-        self._last_ov_geom = None
-        self._last_top_geom = None
-        try:
-            self._position_dim_overlay()
         except Exception:
             pass
 
@@ -892,25 +861,17 @@ class ChatUIMixin:
             y = sf.winfo_rooty()
             w = sf.winfo_width()
             h = sf.winfo_height()
-            # Everything below is in the PHYSICAL px space winfo_* reports.
-            # _WIDTH and _DRAWER_TOP are LOGICAL constants (CTk re-multiplies
-            # them by the widget scaling when sizing/placing the drawer), so
-            # convert them here — unscaled they left the overlay 33-100%
-            # short of the drawer edge / header strip on HiDPI.
-            scale = widget_scale(sf)
             # Drawer width: actual mapped width if available, else its
-            # advertised _WIDTH constant (scaled to physical).
+            # advertised _WIDTH constant.
             sb = getattr(self, "_sidebar", None)
-            sb_w_phys = int(getattr(sb, "_WIDTH", 220) * scale) if sb \
-                else int(220 * scale)
             try:
                 drawer_w = (sb.winfo_width() if sb and sb.winfo_ismapped()
-                            else sb_w_phys)
+                            else getattr(sb, "_WIDTH", 220))
             except Exception:
-                drawer_w = sb_w_phys
+                drawer_w = getattr(sb, "_WIDTH", 220) if sb else 220
             ox = x + drawer_w
             ow = w - drawer_w
-            top_h = int(self._DRAWER_TOP * scale)
+            top_h = self._DRAWER_TOP
             if ow <= 1 or h <= 1:
                 return False
             main_geom = (ow, h, ox, y)
@@ -959,13 +920,7 @@ class ChatUIMixin:
         actually changed (e.g. window moved but didn't resize).
         """
         try:
-            # winfo_height() is PHYSICAL px but configure(height=) is LOGICAL
-            # (CTk re-multiplies by the widget scaling) — mixing them made the
-            # drawer ~2x the window height at 200%. Convert to logical first;
-            # _DRAWER_TOP is already logical. No-op at 100% (scale == 1).
-            scale = widget_scale(self.second_frame)
-            h = max(1, round(self.second_frame.winfo_height() / scale)
-                    - self._DRAWER_TOP)
+            h = max(1, self.second_frame.winfo_height() - self._DRAWER_TOP)
             if getattr(self, "_last_drawer_h", None) != h:
                 self._sidebar.configure(height=h)
                 self._last_drawer_h = h
