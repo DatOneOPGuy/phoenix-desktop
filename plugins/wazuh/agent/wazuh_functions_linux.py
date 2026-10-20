@@ -12,6 +12,8 @@ import socket
 import subprocess
 import tempfile
 import re
+import shutil
+import ssl
 import urllib.error
 import urllib.request
 
@@ -29,6 +31,7 @@ from plugins.wazuh.config import (
     WAZUH_PROTOCOL,
     WAZUH_REGISTRATION_PORT,
     LINUX_WAZUH_DIR,
+    LINUX_WAZUH_DIR_CANDIDATES,
 )
 from utils.i18n import get_text
 
@@ -69,13 +72,7 @@ def run_privileged_command(command, timeout=120):
         logger.warning(get_text("wazuh.agent.wazuh_functions_linux.error_running_pkexec_e", e=e))
 
     logger.info("Falling back to sudo with themed password prompt")
-    import tkinter as tk
-    try:
-        root = tk._default_root
-    except:
-        root = None
-    
-    dialog = CTkPasswordDialog(title=get_text("antivirus.clamav_platform_linux.authentication_required"), text=get_text("wazuh.agent.wazuh_functions_linux.enter_password_to_modify_wazuh"))
+    dialog = CTkPasswordDialog(title="Authentication Required", text="Enter password to modify Wazuh Agent settings:")
     password = dialog.get_input()
 
     if not password:
@@ -235,14 +232,32 @@ def get_package_url():
         # Arch uses the RPM artifact and extracts it with bsdtar (libarchive); upstream Wazuh ships no pacman package
         arch_suffix = LINUX_PKG_ARCH_MAP_RPM.get(arch, "x86_64")
         return LINUX_WAZUH_RPM_URL.format(arch=arch_suffix)
-    elif os_type == "arch":
-        # Wazuh doesn't have an official Arch package, usually installed via AUR
-        # or we might need a specific handling. For now, mark as unsupported.
-        return None
     return None
 
+def installed_agent_dir():
+    """Return the install dir of an existing agent, or None.
+
+    Only the directory itself is stat'ed, so a root-only (0700) tree such as
+    the NixOS module's /opt/resistine is still detected.
+    """
+    for d in LINUX_WAZUH_DIR_CANDIDATES:
+        if os.path.isdir(d):
+            return d
+    return None
+
+
 def is_agent_installed():
-    return os.path.exists(LINUX_WAZUH_DIR)
+    return installed_agent_dir() is not None
+
+
+def is_app_managed_agent():
+    """True only for the agent this app installs (upstream package, /var/ossec).
+
+    An agent under another candidate dir was installed some other way (the
+    Phoenix package, the NixOS module); the app shows it but never removes or
+    re-enrolls it.
+    """
+    return os.path.isdir(LINUX_WAZUH_DIR)
 
 def get_agent_status():
     if not is_agent_installed():
@@ -283,10 +298,13 @@ def get_agent_connection():
     """
     from plugins.wazuh.agent import agent_state
 
+    agent_dir = installed_agent_dir() or LINUX_WAZUH_DIR
     return agent_state.read_agent_connection(
-        os.path.join(LINUX_WAZUH_DIR, "var", "run", "wazuh-agentd.state"),
-        os.path.join(LINUX_WAZUH_DIR, "logs", "ossec.log"),
+        os.path.join(agent_dir, "var", "run", "wazuh-agentd.state"),
+        os.path.join(agent_dir, "logs", "ossec.log"),
     )
+
+_DOWNLOAD_TIMEOUT = 60  # seconds per socket operation
 
 def download_package(progress_callback=None):
     url = get_package_url()
@@ -303,7 +321,13 @@ def download_package(progress_callback=None):
 
     logger.info(f"Downloading Wazuh package from {url}")
     try:
-        urllib.request.urlretrieve(url, pkg_path)
+        # urlopen verifies TLS certificates by default; pass an explicit
+        # default context anyway, plus a timeout so a stalled server can't
+        # hang the install thread forever (urlretrieve has no timeout).
+        ctx = ssl.create_default_context()
+        with urllib.request.urlopen(url, timeout=_DOWNLOAD_TIMEOUT, context=ctx) as resp, \
+                open(pkg_path, "wb") as out:
+            shutil.copyfileobj(resp, out)
         logger.info(f"Downloaded to {pkg_path}")
         return pkg_path
     except urllib.error.HTTPError as e:
@@ -320,7 +344,7 @@ def write_env_file(agent_name, agent_group):
     # Not using env file for Linux, we'll pass via environment to the installer or patch ossec.conf
     pass
 
-_KEY_BACKUP = os.path.expanduser("~/.config/resistine/wazuh_client.keys")
+_KEY_BACKUP = os.path.join(settings.get_config_dir(), "wazuh_client.keys")
 _CLIENT_KEYS = f"{LINUX_WAZUH_DIR}/etc/client.keys"
 
 def start_agent():
@@ -388,7 +412,7 @@ def agent_present(wipe_keys: bool = False) -> bool:
     Mirrors remove_agent's guard so callers batching privileged work (e.g. the
     app uninstaller) can decide whether to include the teardown commands.
     """
-    return is_agent_installed() or (wipe_keys and os.path.exists(_KEY_BACKUP))
+    return is_app_managed_agent() or (wipe_keys and os.path.exists(_KEY_BACKUP))
 
 
 def build_remove_script(wipe_keys: bool = False) -> str:
@@ -460,6 +484,14 @@ def build_remove_script(wipe_keys: bool = False) -> str:
             f"cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}' 2>/dev/null || true; "
             f"chown {os.getuid()}:{os.getgid()} '{_KEY_BACKUP}' 2>/dev/null || true"
         )
+
+    if not is_app_managed_agent():
+        # The only agent (if any) was installed some other way (Phoenix
+        # package, NixOS module). Its service, unit and wazuh user belong to
+        # that install, so only the app's key backup is touched.
+        return f"""
+        {key_phase if wipe_keys else ""}
+    """
 
     return f"""
         {stop_cmd}
@@ -582,6 +614,9 @@ def reenroll_agent():
 
     if not is_agent_installed():
         return (False, "Wazuh agent is not installed")
+    if not is_app_managed_agent():
+        return (False, f"The agent in {installed_agent_dir()} is managed outside "
+                       "this app; re-enroll it with its own installer")
 
     base = get_agent_name()
     new_name = f"{base}-{str(int(time.time()))[-6:]}"

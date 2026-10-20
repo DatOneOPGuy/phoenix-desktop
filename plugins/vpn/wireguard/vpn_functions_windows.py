@@ -19,6 +19,10 @@ import subprocess
 import utils.settings as _settings
 from utils.settings import get_config_dir
 from utils.logger import logger
+from plugins.vpn.wireguard.config_validation import (
+    validate_config_name,
+    validate_section_entry,
+)
 
 # Import client functions so main.py can use check_service_status etc.
 # without importing from two places
@@ -256,7 +260,7 @@ def parse_and_create_vpn_config(
 ) -> str | None:
     try:
         if not vpn_config_json_string:
-            raise ValueError(get_text("vpn.wireguard.vpn_functions_windows.empty_api_response"))
+            raise ValueError("Empty API response")
 
         # The server may hand us the config already parsed (a dict) or as a
         # JSON string. macOS handled both; Windows only handled the string, so
@@ -274,6 +278,9 @@ def parse_and_create_vpn_config(
 
         if not isinstance(interface, dict) or not isinstance(peer, dict):
             raise ValueError(f"Invalid WireGuard JSON shape: keys={list(vpn_config.keys())}")
+
+        # The config name becomes the .conf path and the tunnel service name.
+        validate_config_name(config_name)
 
         # FIX: If the server response doesn't include PrivateKey (expected —
         # the server only knows the public key), inject it from keys.json now.
@@ -320,20 +327,29 @@ def parse_and_create_vpn_config(
                 return ", ".join(str(x).strip() for x in v)
             return v
 
+        def _section_lines(section, entries):
+            """Validate and render one section. Every key/value comes from the
+            server, so reject newline/control-char injection, script hooks
+            (PostUp etc.) and malformed values; skip keys that are not part of
+            the WireGuard format."""
+            out = []
+            for k, v in entries.items():
+                if v is None or v == "" or v == []:
+                    continue
+                if not validate_section_entry(section, k, v):
+                    logger.warning(f"Ignoring unsupported [{section}] key from server: {k!r}")
+                    continue
+                out.append(f"{k} = {_conf_value(v)}")
+            return out
+
         # Build WireGuard .conf text
         lines = []
         lines.append("[Interface]")
-        for k, v in interface.items():
-            if v is None or v == "" or v == []:
-                continue
-            lines.append(f"{k} = {_conf_value(v)}")
+        lines.extend(_section_lines("Interface", interface))
 
         lines.append("")  # blank line between sections
         lines.append("[Peer]")
-        for k, v in peer.items():
-            if v is None or v == "" or v == []:
-                continue
-            lines.append(f"{k} = {_conf_value(v)}")
+        lines.extend(_section_lines("Peer", peer))
 
         conf_text = "\n".join(lines).strip() + "\n"
 

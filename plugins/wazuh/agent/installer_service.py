@@ -41,7 +41,7 @@ _lock = threading.Lock()
 # Cache path
 # ---------------------------------------------------------------------------
 _CACHE_DIR = os.path.join(
-    os.path.expanduser("~/Library/Application Support/Resistine"), "cache"
+    os.path.expanduser("~/Library/Application Support/Phoenix"), "cache"
 )
 _CACHED_PKG = os.path.join(_CACHE_DIR, "wazuh-agent.pkg")
 

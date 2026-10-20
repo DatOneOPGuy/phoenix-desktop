@@ -1,4 +1,4 @@
-"""Antivirus plugin for Resistine Desktop (PyQt6).
+"""Antivirus plugin for Phoenix Desktop (PyQt6).
 
 Faithful PyQt6 port of the original CustomTkinter screen. Provides
 file/directory scanning, real-time protection status, signature updates,
@@ -17,20 +17,18 @@ import random
 import threading
 import time
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
-    QMenu,
     QMessageBox,
     QPushButton,
-    QStackedWidget,
-    QVBoxLayout,
     QWidget,
 )
 
 from gui import theme
-from gui.qt_widgets import scroll_page
+from gui.page_kit import SlideStack
 from plugins.antivirus import clamav
 from plugins.base_plugin import BasePlugin
 from utils import settings
@@ -98,7 +96,7 @@ _PS_AUMID = (
 
 
 def _send_notification_windows(title: str, body: str):
-    """Windows 10/11: native Action Center toast with Resistine logo.
+    """Windows 10/11: native Action Center toast with Phoenix logo.
 
     Toast XML is written to a temp file and read by PowerShell via
     Get-Content -Raw rather than interpolated into the script. The previous
@@ -335,7 +333,7 @@ class Plugin(BasePlugin):
             logger.info("Antivirus: pre-starting clamd for faster scans")
             ok, msg = clamav.start_clamd()
             if not ok:
-                logger.warning(get_text("antivirus.antivirus_clamd_warm_up_failed", msg=msg))
+                logger.warning(f"Antivirus: clamd warm-up failed: {msg}")
         except Exception:
             logger.debug("Antivirus: clamd warm-up errored")
 
@@ -385,52 +383,14 @@ class Plugin(BasePlugin):
         self._destroyed = False
         self._current_view = "main"
 
-        # Centered ~750px column (mirrors the CTk column-weighted layout).
-        self._view_stack = QStackedWidget()
-
-        # --- Main view ---
-        main_inner = QWidget()
-        main_col = QVBoxLayout(main_inner)
-        main_col.setContentsMargins(0, 0, 0, 0)
-        main_col.setSpacing(8)
-        qt_ui.build_status_banner(self, main_col)
-        qt_ui.build_scan_card(self, main_col)
-        qt_ui.build_scan_activity(self, main_col)
-        qt_ui.build_quarantine_card(self, main_col)
-        qt_ui.build_db_info_card(self, main_col)
-        # No trailing stretch: the Signature Database card (added with stretch 1)
-        # absorbs the remaining height so it sits flush with the bottom.
-        self._main_view = scroll_page(main_inner)
+        self._view_stack = SlideStack(fit_height=False)
+        self._main_view = qt_ui.build_main_view(self).widget
         self._view_stack.addWidget(self._main_view)
-
-        # --- Settings view (built eagerly but only shown on gear click) ---
-        settings_inner = QWidget()
-        settings_col = QVBoxLayout(settings_inner)
-        settings_col.setContentsMargins(0, 0, 0, 0)
-        settings_col.setSpacing(8)
-        qt_ui.build_settings_view(self, settings_col)
-        self._settings_view = scroll_page(settings_inner)
+        # Settings view: built eagerly but only shown on gear click.
+        self._settings_view = qt_ui.build_settings_view(self).widget
         self._view_stack.addWidget(self._settings_view)
-
         self._view_stack.setCurrentWidget(self._main_view)
-
-        # Capped content column: compresses freely at small windows (20px
-        # edge margins, NO minimum floor — the old 420px floor clipped cards
-        # at narrow sizes), but stops growing at 700px and centers on wide
-        # windows.
-        container = QWidget()
-        h = QHBoxLayout(container)
-        # CTk-style: centered (pulled off the sidebar) once the window is
-        # wide enough for the 700px cap to engage — leftover space splits
-        # equally between the side stretches. Below the cap the 50:1 weights
-        # collapse the gutters to ~nothing, so a squished window shows the
-        # same ~20px margin on BOTH sides (matching the Endpoint page).
-        h.setContentsMargins(20, 10, 20, 10)
-        h.addStretch(1)
-        self._view_stack.setMaximumWidth(700)
-        h.addWidget(self._view_stack, 50)
-        h.addStretch(1)
-        self.main_container = container
+        self.main_container = self._view_stack
 
         # Populate live data after build (non-blocking, marshalled).
         self.app.after(100, self._refresh_db_info)
@@ -519,7 +479,7 @@ class Plugin(BasePlugin):
     def _show_settings_view(self):
         if self._current_view == "settings":
             return
-        self._view_stack.setCurrentWidget(self._settings_view)
+        self._view_stack.push(self._settings_view)
         self._current_view = "settings"
         self.app.after(20, self._refresh_whitelist)
         self.app.after(40, self._refresh_exclusions)
@@ -530,7 +490,7 @@ class Plugin(BasePlugin):
     def _show_main_view(self):
         if self._current_view == "main":
             return
-        self._view_stack.setCurrentWidget(self._main_view)
+        self._view_stack.back(self._main_view)
         self._current_view = "main"
 
     # ── Realtime status handling ─────────────────────────────
@@ -596,7 +556,7 @@ class Plugin(BasePlugin):
 
         if not status.get("installed"):
             cfg = {
-                "kind": "error", "title": get_text("antivirus.not_installed"),
+                "kind": "error", "title": "Not Installed",
                 "subtitle": (
                     f"{_engine} is not available."
                     if _is_win
@@ -604,7 +564,7 @@ class Plugin(BasePlugin):
                     "it from your distribution's package manager."
                     if is_linux else
                     "ClamAV binaries were not found.\n"
-                    "Reinstall Resistine or run the build script "
+                    "Reinstall Phoenix or run the build script "
                     "to set up antivirus protection."
                 ),
                 "action": (
@@ -617,13 +577,8 @@ class Plugin(BasePlugin):
         else:
             cfg = self._get_runtime_banner_cfg(runtime_state, status)
 
-        from plugins.antivirus.qt_ui import _banner_qss, banner_title_color
-        self._banner_frame.setStyleSheet(_banner_qss(cfg["kind"]))
-        self._banner_label.setStyleSheet(
-            f"color: {banner_title_color(cfg['kind'])}; font-size: 28px; "
-            f"font-weight: 700; background: transparent;"
-        )
-        self._banner_label.setText(cfg["title"])
+        from plugins.antivirus.qt_ui import set_status_pill
+        set_status_pill(self._banner_frame, cfg["kind"], cfg["title"])
         self._banner_subtitle.setText(cfg["subtitle"])
 
         show_progress = setup_state in ("seeding_db", "installing")
@@ -653,8 +608,9 @@ class Plugin(BasePlugin):
     def _get_setup_banner_cfg(self, setup_state, status) -> dict:
         if setup_state == "seeding_db":
             return {
-                "kind": "warn", "title": get_text("antivirus.downloading_definitions"),
-                "subtitle": get_text("antivirus.downloading_malware_signature_database_this"),
+                "kind": "warn", "title": "Downloading Definitions...",
+                "subtitle": "Downloading malware signature database. "
+                            "This may take a few minutes.",
                 "action": None,
             }
         if setup_state == "seed_failed":
@@ -671,22 +627,22 @@ class Plugin(BasePlugin):
                 "network_timeout": "Download timed out. "
                                    "Check your internet connection.",
                 "certs_missing": "Certificate verification failed. "
-                                 "Try reinstalling Resistine.",
+                                 "Try reinstalling Phoenix.",
                 "binary_missing": "ClamAV binaries not found. "
-                                  "Reinstall Resistine.",
+                                  "Reinstall Phoenix.",
                 "partial_download": "Download was incomplete. "
                                     "Tap Retry to try again.",
                 "freshclam_failed": "Signature download failed. "
                                     "Tap Retry to try again.",
             }.get(reason, "Download failed. Tap Retry to try again.")
             return {
-                "kind": "error", "title": get_text("antivirus.download_failed"),
+                "kind": "error", "title": "Download Failed",
                 "subtitle": reason_text,
                 "action": ("Retry", self._retry_setup),
             }
         if setup_state == "db_ready":
             return {
-                "kind": "warn", "title": get_text("antivirus.set_up_protection"),
+                "kind": "warn", "title": "Set Up Protection",
                 "subtitle": (
                     get_text("antivirus.signature_database_downloaded_tap_below")
                 ),
@@ -694,8 +650,9 @@ class Plugin(BasePlugin):
             }
         if setup_state == "installing":
             return {
-                "kind": "warn", "title": get_text("antivirus.setting_up"),
-                "subtitle": get_text("antivirus.configuring_system_level_protection_this"),
+                "kind": "warn", "title": "Setting Up...",
+                "subtitle": "Configuring system-level protection. "
+                            "This may take a moment.",
                 "action": None,
             }
         if setup_state == "install_failed":
@@ -711,20 +668,20 @@ class Plugin(BasePlugin):
             else:
                 subtitle = get_text("antivirus.system_setup_failed_tap_retry")
             return {
-                "kind": "error", "title": get_text("antivirus.setup_failed"),
+                "kind": "error", "title": "Setup Failed",
                 "subtitle": subtitle,
                 "action": ("Retry", self._retry_setup),
             }
         return {
-            "kind": "warn", "title": get_text("antivirus.starting_setup"),
-            "subtitle": get_text("antivirus.preparing_to_download_malware_definitions"),
+            "kind": "warn", "title": "Starting Setup...",
+            "subtitle": "Preparing to download malware definitions...",
             "action": None,
         }
 
     def _get_runtime_banner_cfg(self, runtime_state, status) -> dict:
         if runtime_state == "healthy":
             return {
-                "kind": "ok", "title": get_text("antivirus.protected"),
+                "kind": "ok", "title": "Protected",
                 "subtitle": (
                     "Real-time malware protection is active"
                     if status.get("clamonacc_running")
@@ -734,28 +691,32 @@ class Plugin(BasePlugin):
             }
         if runtime_state == "degraded":
             return {
-                "kind": "warn", "title": get_text("antivirus.protection_degraded"),
+                "kind": "warn", "title": "Protection Degraded",
                 "subtitle": (
                     get_text("antivirus.scanning_is_available_but_real")
                 ),
-                "action": (get_text("antivirus.qt_ui.open_settings"), self._open_fda_for_helper),
+                "action": ("Open Settings", self._safe(clamav, "open_fda_settings")),
             }
         if runtime_state == "approval_required":
             return {
-                "kind": "warn", "title": get_text("antivirus.approval_required"),
+                "kind": "warn", "title": "Approval Required",
                 "subtitle": (
-                    get_text("antivirus.enable_clamav_daemons_in_system")
+                    "Enable ClamAV daemons in System Settings "
+                    "› General › Login Items "
+                    "for real-time protection."
                 ),
                 "action": ("Open Login Items",
                            self._safe(clamav, "open_login_items_settings")),
             }
         if runtime_state == "fda_required":
             return {
-                "kind": "warn", "title": get_text("antivirus.full_disk_access_required"),
+                "kind": "warn", "title": "Full Disk Access Required",
                 "subtitle": (
-                    get_text("antivirus.real_time_monitoring_runs_in")
+                    "Phoenix needs Full Disk Access to monitor files "
+                    "in real time. Grant access in System Settings "
+                    "› Privacy & Security › Full Disk Access."
                 ),
-                "action": (get_text("antivirus.qt_ui.open_settings"), self._open_fda_for_helper),
+                "action": ("Open Settings", self._safe(clamav, "open_fda_settings")),
             }
         _is_win = platform.system() == "Windows"
         is_linux = platform.system() == "Linux"
@@ -764,7 +725,7 @@ class Plugin(BasePlugin):
         except Exception:
             _engine = "ClamAV"
         return {
-            "kind": "error", "title": get_text("antivirus.protection_offline"),
+            "kind": "error", "title": "Protection Offline",
             "subtitle": (
                 f"{_engine} protection is offline"
                 if _is_win
@@ -775,7 +736,7 @@ class Plugin(BasePlugin):
                     "Enable systemd to start real-time protection."
                     if is_linux else
                     "On-demand scanning available. "
-                    "Install Resistine.app for real-time protection."
+                    "Install the Phoenix app for real-time protection."
                 )
             ),
             "action": (
@@ -784,15 +745,6 @@ class Plugin(BasePlugin):
                 else None
             ),
         }
-
-    def _open_fda_for_helper(self):
-        """Open the FDA pane AND reveal ResistineClamAV.app in Finder.
-
-        FDA must be granted to the helper bundle (not the main app), and
-        macOS does not auto-list it — the user has to drag it in.
-        """
-        self._safe(clamav, "reveal_clamav_helper_in_finder")()
-        self._safe(clamav, "open_fda_settings")()
 
     @staticmethod
     def _safe(module, name):
@@ -860,14 +812,14 @@ class Plugin(BasePlugin):
             resources = t.get("resources", [])
             path = resources[0] if resources else "unknown location"
             _send_notification(
-                "Resistine — Threat Blocked",
+                "Phoenix — Threat Blocked",
                 f"{name} was blocked at {os.path.basename(path)}",
             )
             try:
                 threat_log.log_threat_detected(name, path)
             except Exception:
                 pass
-            logger.warning(get_text("antivirus.antivirus_rtd_name_at_path", name=name, path=path))
+            logger.warning(f"Antivirus RTD: {name} at {path}")
 
     def _toggle_auto_update(self, *args):
         # macOS has no auto-update toggle: signature updates are always on,
@@ -936,7 +888,7 @@ class Plugin(BasePlugin):
         from utils import notifications
         basename = os.path.basename(filepath)
         notifications.send(
-            "Resistine — Threat Blocked",
+            "Phoenix — Threat Blocked",
             f"Malware detected: {signature}\n{basename}",
             urgency="critical",
         )
@@ -944,7 +896,7 @@ class Plugin(BasePlugin):
     def _handle_rtd_summary_on_main(self, count: int):
         from utils import notifications
         notifications.send(
-            "Resistine — Threat Blocked",
+            "Phoenix — Threat Blocked",
             f"{count} additional threat(s) detected",
             urgency="critical",
         )
@@ -1006,7 +958,7 @@ class Plugin(BasePlugin):
             settings.set("antivirus", "last_sig_update_ts", time.time())
             logger.info(f"Antivirus: auto-update succeeded — {msg}")
         else:
-            logger.warning(get_text("antivirus.antivirus_auto_update_failed_msg", msg=msg))
+            logger.warning(f"Antivirus: auto-update failed — {msg}")
         try:
             self.app.after(0, self._refresh_db_info)
         except Exception:
@@ -1040,6 +992,7 @@ class Plugin(BasePlugin):
         self._scan_log_buffer.append(text)
         try:
             self._scan_log.appendPlainText(text)
+            self._scan_log.show()
         except Exception:
             pass
 
@@ -1052,7 +1005,7 @@ class Plugin(BasePlugin):
 
     def _set_scan_buttons_state(self, state: str):
         enabled = state == "normal"
-        for key in ("scan", "scan_computer"):
+        for key in ("scan", "scan_computer", "scan_files", "scan_folder"):
             btn = self._action_buttons.get(key)
             if btn is not None:
                 try:
@@ -1067,6 +1020,7 @@ class Plugin(BasePlugin):
         if self._scan_log_buffer:
             try:
                 self._scan_log.setPlainText("\n".join(self._scan_log_buffer))
+                self._scan_log.show()
             except Exception:
                 pass
 
@@ -1078,7 +1032,7 @@ class Plugin(BasePlugin):
                 self._scan_progress.setRange(0, 1000)
                 self._scan_progress.setValue(int(1000 * count / total))
                 self._scan_status_label.setText(
-                    get_text("antivirus.scanned_count_total_files", count=count, total=total))
+                    f"Scanned {count} / {total} files")
             else:
                 self._scan_progress.setRange(0, 0)  # indeterminate
         except Exception:
@@ -1093,7 +1047,7 @@ class Plugin(BasePlugin):
     def _start_system_setup(self):
         if self._banner_action_btn:
             self._banner_action_btn.setEnabled(False)
-            self._banner_action_btn.setText(get_text("antivirus.starting"))
+            self._banner_action_btn.setText("Starting...")
 
         if platform.system() == "Darwin":
             def _run():
@@ -1128,7 +1082,7 @@ class Plugin(BasePlugin):
     def _start_protection(self):
         if self._banner_action_btn:
             self._banner_action_btn.setEnabled(False)
-            self._banner_action_btn.setText(get_text("antivirus.starting"))
+            self._banner_action_btn.setText("Starting...")
         if self._banner_progress:
             self._banner_progress.setRange(0, 0)
             self._banner_progress.show()
@@ -1160,7 +1114,7 @@ class Plugin(BasePlugin):
     def _retry_setup(self):
         if self._banner_action_btn:
             self._banner_action_btn.setEnabled(False)
-            self._banner_action_btn.setText(get_text("antivirus.retrying"))
+            self._banner_action_btn.setText("Retrying...")
 
         def _run():
             try:
@@ -1236,7 +1190,10 @@ class Plugin(BasePlugin):
     def _on_action(self, action_key: str):
         logger.info(f"Antivirus: action triggered — {action_key}")
         actions = {
-            "scan": self._start_scan,
+            "scan": self._show_scan_choices,
+            "scan_files": lambda: self._choose_and_scan("files"),
+            "scan_folder": lambda: self._choose_and_scan("folder"),
+            "scan_back": self._hide_scan_choices,
             "scan_computer": self._start_computer_scan,
             "update_sigs": self._start_sig_update,
             "whitelist_add": self._add_whitelist_entry,
@@ -1247,39 +1204,42 @@ class Plugin(BasePlugin):
 
     # ── File / Directory Scan ─────────────────────────────────
 
-    def _pick_scan_targets(self) -> list[str]:
-        """Pick files or a folder to scan via Qt dialogs.
+    def _show_scan_choices(self):
+        """Slide the action rows over to the files / folder choice."""
+        stack = getattr(self, "_scan_actions", None)
+        if stack is not None and not self._scanning:
+            stack.push(self._scan_actions_choices)
 
-        A small menu on the Scan… button makes the folder option explicit —
-        the old flow only reached the folder dialog after CANCELLING the
-        file dialog, which nobody discovers.
-        """
-        menu = QMenu(self.app)
-        act_files = menu.addAction(get_text("antivirus.scan_files"))
-        act_folder = menu.addAction(get_text("antivirus.scan_folder"))
-        btn = getattr(self, "_action_buttons", {}).get("scan")
-        if btn is not None:
-            pos = btn.mapToGlobal(btn.rect().bottomLeft())
-        else:  # fallback: at the cursor
-            from PyQt6.QtGui import QCursor
-            pos = QCursor.pos()
-        chosen = menu.exec(pos)
-        if chosen is act_files:
-            files, _ = QFileDialog.getOpenFileNames(
-                None,  # no parent: movable panel, not a fixed macOS sheet
-                get_text("antivirus.scan_picker.select_files_to_scan"))
-            return list(files)
-        if chosen is act_folder:
+    def _hide_scan_choices(self):
+        stack = getattr(self, "_scan_actions", None)
+        if stack is not None:
+            try:
+                stack.back(self._scan_actions_main)
+            except RuntimeError:  # screen rebuilt
+                pass
+
+    def _choose_and_scan(self, kind: str):
+        # Slide back first so the main rows are in place once the picker
+        # closes (whether or not something was chosen).
+        self._hide_scan_choices()
+        self._start_scan(kind)
+
+    def _pick_scan_targets(self, kind: str = "files") -> list[str]:
+        """Pick files (``kind="files"``) or a folder to scan."""
+        if kind == "folder":
             directory = QFileDialog.getExistingDirectory(
                 None,  # no parent: movable panel, not a fixed macOS sheet
-                get_text("antivirus.scan_picker.select_folder_to_scan"))
+                "Select Folder to Scan")
             return [directory] if directory else []
-        return []
+        files, _ = QFileDialog.getOpenFileNames(
+            None,  # no parent: movable panel, not a fixed macOS sheet
+            "Select Files to Scan")
+        return list(files)
 
-    def _start_scan(self):
+    def _start_scan(self, kind: str = "files"):
         if self._scanning:
             return
-        paths = self._pick_scan_targets()
+        paths = self._pick_scan_targets(kind)
         if not paths:
             return
         targets = []
@@ -1295,13 +1255,13 @@ class Plugin(BasePlugin):
                 targets.append(path)
         if skipped:
             QMessageBox.information(
-                self.app, get_text("antivirus.whitelisted"),
+                self.app, "Whitelisted",
                 f"{len(skipped)} item(s) skipped (whitelisted):\n"
                 + "\n".join(skipped[:10]),
             )
         if not targets:
             return
-        self._run_multi_scan(targets, label=get_text("antivirus.scan"))
+        self._run_multi_scan(targets, label="Scan")
 
     def _computer_scan_targets(self) -> list[str]:
         system = platform.system()
@@ -1341,8 +1301,8 @@ class Plugin(BasePlugin):
         targets = self._computer_scan_targets()
         if not targets:
             QMessageBox.information(
-                self.app, get_text("antivirus.nothing_to_scan"),
-                get_text("antivirus.no_scannable_directories_found_check"),
+                self.app, "Nothing to Scan",
+                "No scannable directories found. Check your whitelist.",
             )
             return
         self._run_multi_scan(targets)
@@ -1403,9 +1363,8 @@ class Plugin(BasePlugin):
                         agg["files_seen"] += 1
                         total = agg["total_files"]
                         if total > 0:
-                            status = get_text(
-                                "antivirus.scanned_count_total_files",
-                                count=agg["files_seen"], total=total)
+                            status = (
+                                f"Scanned {agg['files_seen']} / {total} files")
                             pct = agg["files_seen"] / total
                         else:
                             status = f"Scanned {agg['files_seen']} files"
@@ -1457,7 +1416,7 @@ class Plugin(BasePlugin):
         short = os.path.basename(target.rstrip(os.sep)) or target
         try:
             self._scan_status_label.setText(
-                get_text("antivirus.idx_total_scanning_short", idx=idx, total=total, short=short))
+                f"[{idx}/{total}] Scanning: {short}")
         except Exception:
             pass
 
@@ -1516,12 +1475,18 @@ class Plugin(BasePlugin):
             cancel_btn.setEnabled(True)
             cancel_btn.hide()
 
+        if not (result.error and "cancelled" in result.error.lower()):
+            # For the Dashboard's Antivirus panel (counts only, no paths).
+            settings.set("antivirus", "last_scan", {
+                "ts": time.time(), "scanned": int(result.scanned or 0),
+                "infected": int(result.infected or 0), "error": bool(result.error)})
+
         if result.error:
             if "cancelled" in result.error.lower():
-                self._scan_status_label.setText(get_text("antivirus.scan_cancelled"))
+                self._scan_status_label.setText("Scan cancelled")
                 self._log_append("Scan cancelled.")
             else:
-                self._scan_status_label.setText(get_text("antivirus.scan_failed"))
+                self._scan_status_label.setText("Scan failed")
                 self._log_append(f"Error: {result.error}")
             return
 
@@ -1534,11 +1499,10 @@ class Plugin(BasePlugin):
 
         if result.infected > 0:
             self._scan_status_label.setText(
-                get_text("antivirus.threats_found_infected",
-                         infected=result.infected))
+                f"Threats found: {result.infected}")
             try:
                 notifications.send(
-                    "Resistine — Threats Detected",
+                    "Phoenix — Threats Detected",
                     f"{result.infected} infected file(s) found during scan.",
                     urgency="critical",
                 )
@@ -1557,7 +1521,7 @@ class Plugin(BasePlugin):
             if infections:
                 self._offer_quarantine_batch(infections)
         else:
-            self._scan_status_label.setText(get_text("antivirus.no_threats_found"))
+            self._scan_status_label.setText("No threats found")
 
     def _offer_quarantine_batch(self, infections: dict[str, str]):
         from plugins.antivirus import threat_log
@@ -1569,7 +1533,7 @@ class Plugin(BasePlugin):
             listing += f"\n  ... and {len(names) - 20} more"
 
         answer = QMessageBox.question(
-            self.app, get_text("antivirus.threats_detected"),
+            self.app, "Threats Detected",
             f"{len(filepaths)} infected file(s) found:\n\n"
             f"{listing}\n\nMove all to quarantine?",
         ) == QMessageBox.StandardButton.Yes
@@ -1602,12 +1566,12 @@ class Plugin(BasePlugin):
         btn = self._action_buttons.get("update_sigs")
         if btn:
             btn.setEnabled(False)
-            btn.setText(get_text("antivirus.updating"))
+            btn.setText("Updating...")
 
         self._log_clear()
         self._log_append("Updating signature database...")
         try:
-            self._scan_status_label.setText(get_text("antivirus.updating_signatures"))
+            self._scan_status_label.setText("Updating signatures...")
         except Exception:
             pass
 
@@ -1628,12 +1592,12 @@ class Plugin(BasePlugin):
             btn = self._action_buttons.get("update_sigs")
             if btn:
                 btn.setEnabled(True)
-                btn.setText(get_text("antivirus.update_now"))
+                btn.setText("Update Now")
             if ok:
                 settings.set("antivirus", "last_sig_update_ts", time.time())
-                self._scan_status_label.setText(get_text("antivirus.signatures_updated"))
+                self._scan_status_label.setText("Signatures updated")
             else:
-                self._scan_status_label.setText(get_text("antivirus.update_failed"))
+                self._scan_status_label.setText("Update failed")
         except Exception:
             pass
         self._refresh_db_info()
@@ -1669,11 +1633,19 @@ class Plugin(BasePlugin):
         row = QWidget()
         row.setObjectName("Transparent")
         h = QHBoxLayout(row)
-        h.setContentsMargins(0, 0, 0, 0)
-        h.setSpacing(4)
+        h.setContentsMargins(0, 6, 0, 6)
+        h.setSpacing(8)
         lbl = QLabel(text)
+        lbl.setObjectName("Val")
         h.addWidget(lbl, 1)
         return row, h
+
+    @staticmethod
+    def _remove_button(on_click) -> QPushButton:
+        from gui.page_kit import icon_button
+        btn = icon_button("x", "Remove", 16)
+        btn.clicked.connect(on_click)
+        return btn
 
     # ── Whitelist ──────────────────────────────────────────────
 
@@ -1700,16 +1672,12 @@ class Plugin(BasePlugin):
             return
         if not entries:
             from plugins.antivirus.qt_ui import muted
-            layout.addWidget(muted(get_text("antivirus.ui_cards.no_whitelisted_paths")))
+            layout.addWidget(muted("No whitelisted paths"))
             return
         for entry in entries:
             row, h = self._list_row(os.path.basename(entry) or entry)
-            rm = QPushButton("✕")
-            rm.setObjectName("Secondary")
-            rm.setFixedSize(24, 24)
-            rm.clicked.connect(
-                lambda _=False, p=entry: self._remove_whitelist(p))
-            h.addWidget(rm)
+            h.addWidget(self._remove_button(
+                lambda _=False, p=entry: self._remove_whitelist(p)))
             layout.addWidget(row)
 
     def _remove_whitelist(self, path: str):
@@ -1774,16 +1742,12 @@ class Plugin(BasePlugin):
 
         if not excl["extensions"]:
             from plugins.antivirus.qt_ui import muted
-            layout.addWidget(muted(get_text("antivirus.no_excluded_extensions")))
+            layout.addWidget(muted("No excluded extensions"))
         else:
             for ext in excl["extensions"]:
                 row, h = self._list_row(ext)
-                rm = QPushButton("✕")
-                rm.setObjectName("Secondary")
-                rm.setFixedSize(24, 24)
-                rm.clicked.connect(
-                    lambda _=False, e=ext: self._remove_excluded_extension(e))
-                h.addWidget(rm)
+                h.addWidget(self._remove_button(
+                    lambda _=False, e=ext: self._remove_excluded_extension(e)))
                 layout.addWidget(row)
 
         size_entry = getattr(self, "_size_entry", None)
@@ -1812,7 +1776,7 @@ class Plugin(BasePlugin):
         btn = getattr(self, "_siem_btn", None)
         if btn:
             btn.setEnabled(False)
-            btn.setText(get_text("antivirus.configuring"))
+            btn.setText("Configuring...")
 
         def _run():
             from plugins.antivirus import threat_log
@@ -1830,31 +1794,22 @@ class Plugin(BasePlugin):
         if ok:
             self._log_append(f"SIEM: {msg}")
             if btn:
-                btn.setText(get_text("antivirus.configured"))
+                btn.setText("Configured")
                 btn.setEnabled(False)
             if lbl:
-                lbl.setText(get_text("antivirus.forwarding_active"))
+                lbl.setText("Forwarding active")
         else:
             self._log_append(f"SIEM setup failed: {msg}")
             if btn:
                 btn.setEnabled(True)
-                btn.setText(get_text("antivirus.configure_forwarding"))
+                btn.setText("Configure Forwarding")
 
     def _open_endpoint(self):
-        """Open the SIEM agent screen.
-
-        That screen is now the Endpoint plugin's "Agent" tab rather than its
-        own sidebar entry, so navigate to Endpoint and then ask it to select
-        that tab. The show_tab() call is guarded because navigate() succeeding
-        does not guarantee the plugin exposes it."""
+        """Navigate to the Endpoint (SIEM agent) plugin screen."""
         try:
             self.app.navigate("Endpoint")
-            for plugin in getattr(self.app, "plugins", None) or []:
-                if plugin.get_name() == "Endpoint" and hasattr(plugin, "show_tab"):
-                    plugin.show_tab("Agent")
-                    break
         except Exception:
-            logger.debug("Antivirus: could not open the Endpoint agent tab")
+            logger.debug("Antivirus: could not navigate to Endpoint")
 
     def _refresh_siem_switch(self):
         """Re-sync the SIEM forwarding button with the live agent state."""
@@ -1870,12 +1825,12 @@ class Plugin(BasePlugin):
             installed, on = False, False
         try:
             if on:
-                btn.setText(get_text("antivirus.configured"))
+                btn.setText("Configured")
                 btn.setEnabled(False)
                 if lbl:
-                    lbl.setText(get_text("antivirus.forwarding_active"))
+                    lbl.setText("Forwarding active")
             else:
-                btn.setText(get_text("antivirus.configure_forwarding"))
+                btn.setText("Configure Forwarding")
                 btn.setEnabled(True)
                 if lbl:
                     lbl.setText(
@@ -1898,24 +1853,22 @@ class Plugin(BasePlugin):
             return
         if not entries:
             from plugins.antivirus.qt_ui import muted
-            layout.addWidget(muted(get_text("antivirus.ui_cards.no_threats_quarantined")))
+            layout.addWidget(muted("No threats quarantined"))
             return
         for qpath in entries:
             name = os.path.basename(qpath).replace(".quarantined", "")
             row, h = self._list_row(name)
-            restore = QPushButton(get_text("antivirus.restore"))
-            restore.setObjectName("Secondary")
-            restore.setStyleSheet(
-                "QPushButton { background-color: transparent; border: none; "
-                "color: #2563EB; font-size: 11px; }")
+            restore = QPushButton("Restore")
+            restore.setObjectName("Link")
+            restore.setCursor(Qt.CursorShape.PointingHandCursor)
             restore.clicked.connect(
                 lambda _=False, p=qpath: self._restore_quarantined(p))
             h.addWidget(restore)
-            delete = QPushButton(get_text("antivirus.delete"))
-            delete.setObjectName("Danger")
+            delete = QPushButton("Delete")
+            delete.setObjectName("Link")
+            delete.setCursor(Qt.CursorShape.PointingHandCursor)
             delete.setStyleSheet(
-                "QPushButton { background-color: transparent; border: none; "
-                "color: #DC2626; font-size: 11px; }")
+                f"color: {theme.badge_colors('error')[1]};")
             delete.clicked.connect(
                 lambda _=False, p=qpath: self._delete_quarantined(p))
             h.addWidget(delete)
@@ -1936,13 +1889,13 @@ class Plugin(BasePlugin):
         if ok:
             self._refresh_quarantine()
         else:
-            QMessageBox.critical(self.app, get_text("antivirus.restore_failed"), msg)
+            QMessageBox.critical(self.app, "Restore Failed", msg)
 
     def _delete_quarantined(self, qpath: str):
         name = os.path.basename(qpath).replace(".quarantined", "")
         confirmed = QMessageBox.question(
-            self.app, get_text("antivirus.delete_quarantined_file"),
-            get_text("antivirus.permanently_delete_name", name=name),
+            self.app, "Delete Quarantined File",
+            f"Permanently delete '{name}'?",
         ) == QMessageBox.StandardButton.Yes
         if not confirmed:
             return

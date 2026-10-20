@@ -24,7 +24,6 @@ import tempfile
 
 from utils import settings
 from utils.logger import logger
-from utils.i18n import get_text
 
 _PLATFORM = platform.system()
 _NAMESPACE = "wazuh"
@@ -102,8 +101,9 @@ def _run_privileged(script: str) -> bool:
             ok, _out = rp(script)
             return ok
         from plugins.wazuh.agent.wazuh_functions_linux import run_privileged_command
-        result = run_privileged_command(["sh", "-c", script])
-        return bool(result and result.returncode == 0)
+        # run_privileged_command returns (success, output) — not a CompletedProcess.
+        ok, _out = run_privileged_command(["sh", "-c", script])
+        return bool(ok)
     except Exception as e:  # noqa: BLE001
         logger.error(f"[CLAMAV-FWD] privileged run failed: {e}")
         return False
@@ -136,5 +136,5 @@ def ensure_clamav_log_forwarding(on_status=None) -> bool:
         settings.set(_NAMESPACE, _FLAG, True)
         logger.info("[CLAMAV-FWD] forwarding enabled and agent restarted")
     else:
-        logger.warning(get_text("wazuh.agent.log_forwarding.clamav_fwd_failed_to_enable"))
+        logger.warning("[CLAMAV-FWD] failed to enable forwarding")
     return ok

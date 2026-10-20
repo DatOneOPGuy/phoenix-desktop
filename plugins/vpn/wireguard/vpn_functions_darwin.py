@@ -14,7 +14,25 @@ from typing import Optional, Tuple
 
 from utils import settings
 from utils.logger import logger
-from utils.i18n import get_text
+from plugins.vpn.wireguard.config_validation import (
+    optional_peer_lines,
+    validate_config_name,
+    validate_server_config,
+    validate_wg_field,
+)
+
+
+def _restrict_dir_permissions(path):
+    """Ensure the WireGuard config dir is private (0o700).
+
+    makedirs(mode=...) is subject to the umask and does not touch an existing
+    directory, so chmod explicitly. Failures are logged, not fatal.
+    """
+    try:
+        if (os.stat(path).st_mode & 0o777) != 0o700:
+            os.chmod(path, 0o700)
+    except OSError as e:
+        logger.warning(f"Could not restrict permissions on {path}: {e}")
 
 
 def get_writable_wireguard_dir():
@@ -30,7 +48,8 @@ def get_writable_wireguard_dir():
         home, "Library", "Group Containers", "group.Resistine.WireguardTest"
     )
     wireguard_dir = os.path.join(app_group_container, "wireguard")
-    os.makedirs(wireguard_dir, exist_ok=True)
+    os.makedirs(wireguard_dir, mode=0o700, exist_ok=True)
+    _restrict_dir_permissions(wireguard_dir)
     return wireguard_dir
 
 
@@ -53,7 +72,7 @@ class HelperToolManager:
         """Locate resistine-vpn-cli tool in the app bundle"""
         # When frozen (PyInstaller), look relative to the executable
         if getattr(sys, "frozen", False):
-            # sys.executable is in Contents/MacOS/Resistine
+            # sys.executable is in Contents/MacOS/Phoenix
             macos_dir = os.path.dirname(sys.executable)
             contents_dir = os.path.dirname(macos_dir)
             
@@ -75,7 +94,7 @@ class HelperToolManager:
                 return old_cli_path
 
         # Development mode: VPN features require the built app bundle
-        # Run ./build-installer.sh first, then test from dist/Resistine.app
+        # Run ./build-installer.sh first, then test from dist/Phoenix.app
         logger.warning("VPN CLI not found - run ./build-installer.sh to build the app")
         return None
 
@@ -453,6 +472,20 @@ def parse_and_create_vpn_config(vpn_config_json_string, config_name="resistine")
             logger.error("❌ Error: Private key not found in keychain")
             return None
 
+        # Validate every server-provided value (and the config name, which
+        # becomes a file path) before anything is written, so a malicious API
+        # response can't inject extra lines such as PostUp into the .conf.
+        try:
+            validate_config_name(config_name)
+            validate_wg_field(private_key, "PrivateKey")
+            validate_server_config(
+                server_public_key, endpoint, client_address, allowed_ips, dns_servers
+            )
+            extra_peer_lines = optional_peer_lines(peer_config)
+        except ValueError as e:
+            logger.error(f"Rejected invalid VPN config from server: {e}")
+            return None
+
         # Convert AllowedIPs array to comma-separated string
         allowed_ips_str = (
             ", ".join(allowed_ips)
@@ -478,6 +511,8 @@ PublicKey = {server_public_key}
 AllowedIPs = {allowed_ips_str}
 Endpoint = {endpoint}
 """
+        if extra_peer_lines:
+            config_content += "\n".join(extra_peer_lines) + "\n"
 
         # Get writable WireGuard directory
         wireguard_dir = get_writable_wireguard_dir()
@@ -608,13 +643,14 @@ def save_vpn_configuration(vpn_config_json, config_name="resistine"):
 
 
 import time as _time
+from utils.i18n import get_text
 
 _extension_cache = {"value": None, "timestamp": 0}
 _EXTENSION_CACHE_TTL = 2  # seconds
 
 
 def is_extension_enabled():
-    """Check if the Resistine network extension is enabled in Login Items & Extensions.
+    """Check if the Phoenix network extension is enabled in Login Items & Extensions.
 
     Uses systemextensionsctl to verify the extension is both activated AND enabled.
     A NETunnelProviderManager can exist in preferences even when the extension is
@@ -651,91 +687,3 @@ def is_extension_enabled():
     except Exception as e:
         logger.warning(get_text("vpn.wireguard.vpn_functions_darwin.extension_status_check_failed_e", e=e))
         return False
-
-
-def ensure_helper_registered():
-    """Register the privileged helper on macOS (runs silently on startup)"""
-    import sys
-    import os
-
-    # Skip registration if running from source (SMAppService requires a bundle)
-    if not (".app/Contents/MacOS" in sys.executable or ".app/Contents/MacOS" in os.path.abspath(sys.argv[0])):
-        logger.debug("Skipping helper registration (not running as an app bundle)")
-        return
-
-    try:
-        from ServiceManagement import SMAppService
-
-        plist_name = "com.resistine.plist"
-
-        # Create the service
-        try:
-            service = SMAppService.daemonServiceWithPlistName_(plist_name)
-        except:
-            try:
-                service = SMAppService.daemonWithPlistName_(plist_name)
-            except:
-                logger.warning(get_text("main.helper.could_not_create"))
-                return
-
-        # Check current status
-        status = int(service.status())
-        status_map = {
-            0: "notRegistered",
-            1: "enabled",
-            2: "requiresApproval",
-            3: "notFound",
-        }
-        status_str = status_map.get(status, "unknown")
-
-        if status == 1:  # Already enabled
-            logger.info(get_text("main.helper.already_enabled"))
-            return
-
-        if status == 2:  # Requires approval
-            logger.warning(get_text("main.helper.requires_approval"))
-            prompt_helper_approval(service)
-            return
-
-        # Not registered yet (0 or 3), try to register
-        logger.info(get_text("main.helper.registering"))
-        error = service.registerAndReturnError_(None)
-
-        if error:
-            logger.error(get_text("main.helper.registration_error", error=error))
-            new_status = int(service.status())
-            if new_status == 2:
-                prompt_helper_approval(service)
-        else:
-            logger.info(get_text("main.helper.registered"))
-
-    except ImportError:
-        logger.warning(get_text("main.helper.framework_unavailable"))
-    except Exception as e:
-        logger.error(f"Helper registration error: {e}")
-
-
-def prompt_helper_approval(service):
-    """Prompt user to approve helper in System Settings"""
-    try:
-        from gui.dialogs import ask_yes_no
-        import tkinter as tk
-
-        try:
-            root = tk._default_root
-        except:
-            root = None
-
-        def on_confirm(confirmed):
-            if confirmed:
-                service.openSystemSettingsLoginItems()
-                logger.info("Opened System Settings - Login Items")
-
-        ask_yes_no(
-            root,
-            get_text("main.helper.approval_title"),
-            get_text("main.helper.approval_message"),
-            on_confirm
-        )
-    except Exception as e:
-        logger.error(f"Could not prompt for approval: {e}")
