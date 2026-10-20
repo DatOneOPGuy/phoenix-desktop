@@ -188,9 +188,18 @@ class PluginManager:
         Download a plugin and extract it to the USER'S plugins directory.
         """
         try:
+            # Plugin zips are executable content (importlib.import_module runs
+            # them). Until archives are signed, at minimum: HTTPS only, and
+            # size caps so a hostile feed can't zip-bomb the client.
+            if not str(url).startswith("https://"):
+                logger.error(f"Refusing non-HTTPS plugin download: {url}")
+                return False, "Refused: plugin downloads must use HTTPS."
             logger.info(f"Downloading plugin from: {url}")
             response = requests.get(url, allow_redirects=True, timeout=30)
             response.raise_for_status()
+            if len(response.content) > 50 * 1024 * 1024:
+                logger.error("Refusing plugin download over 50 MB")
+                return False, "Refused: plugin archive too large."
             
             # Determine target directory
             if plugin_name:
@@ -207,6 +216,10 @@ class PluginManager:
                 os.makedirs(target_path, exist_ok=True)
             
             with zipfile.ZipFile(io.BytesIO(response.content)) as zip_ref:
+                total_unpacked = sum(i.file_size for i in zip_ref.infolist())
+                if total_unpacked > 200 * 1024 * 1024:
+                    logger.error("Refusing plugin zip expanding over 200 MB")
+                    return False, "Refused: plugin archive expands too large."
                 # Check if all files in the zip are already inside a single top-level folder
                 # with the same name. If so, we extract to self.user_plugins_path directly.
                 first_file = zip_ref.namelist()[0]

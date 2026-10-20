@@ -144,10 +144,14 @@ class _Bubble(QFrame):
     card floating over the page).
     """
 
-    def __init__(self, *, is_user: bool, max_width: int):
+    def __init__(self, *, is_user: bool, max_width: int,
+                 untrusted: bool = False):
         super().__init__()
         self._is_user = is_user
         self._max_width = max_width
+        # Untrusted bubbles (SIEM alerts quoting monitored-host data) get the
+        # Dashboard treatment: raw HTML escaped, no clickable links.
+        self._untrusted = untrusted
         self._raw_text = ""
         self._has_content = False  # gates copy/hover until real text lands
 
@@ -212,15 +216,22 @@ class _Bubble(QFrame):
         self._view = QTextBrowser()
         self._view.setObjectName("ChatBubbleText")
         self._view.setFrameShape(QFrame.Shape.NoFrame)
-        self._view.setOpenExternalLinks(True)  # markdown links → browser
+        if self._untrusted:
+            # Alert text can smuggle file:// or UNC links — never activate.
+            self._view.setOpenLinks(False)
+            self._view.setOpenExternalLinks(False)
+            self._view.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse)
+        else:
+            self._view.setOpenExternalLinks(True)  # markdown links → browser
+            # Read-only browser shows no caret; mouse-select + link-click only.
+            self._view.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+                | Qt.TextInteractionFlag.LinksAccessibleByMouse)
         self._view.setVerticalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._view.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        # Read-only browser shows no caret; mouse-select + link-click only.
-        self._view.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-            | Qt.TextInteractionFlag.LinksAccessibleByMouse)
         self._view.document().setDocumentMargin(3)
         self._view.document().setDefaultStyleSheet(stylesheet(self._fg))
         self._view.setStyleSheet(
@@ -398,7 +409,9 @@ class _Bubble(QFrame):
         if self._thinking and text:
             self._end_thinking()
         try:
-            self._view.setHtml(markdown_to_html(text) if text else "")
+            self._view.setHtml(
+                markdown_to_html(text, allow_html=not self._untrusted)
+                if text else "")
         except RuntimeError:
             # Browser deleted mid-stream (session switched / chat torn down).
             return
@@ -1211,7 +1224,7 @@ class Plugin(BasePlugin):
                 md="**🚨 SIEM alerts**\n\nNo alerts yet. Alerts about machines you own "
                    "will appear here.")
         for alert in alerts:
-            self._add_assistant_bubble(md=_alert_markdown(alert))
+            self._add_assistant_bubble(md=_alert_markdown(alert), untrusted=True)
         siem_alerts.store().mark_read()
         self._refresh_sidebar()
         self._sync_input_enabled()
@@ -1247,7 +1260,7 @@ class Plugin(BasePlugin):
             pass
         try:
             if self._viewing_alerts and getattr(self, "_messages_lay", None) is not None:
-                self._add_assistant_bubble(md=_alert_markdown(alert))
+                self._add_assistant_bubble(md=_alert_markdown(alert), untrusted=True)
                 siem_alerts.store().mark_read()
             self._refresh_sidebar()
         except RuntimeError:
@@ -1401,8 +1414,10 @@ class Plugin(BasePlugin):
         self._insert_row(_BubbleRow(bubble, is_user=True))
         return bubble
 
-    def _add_assistant_bubble(self, md: str | None = None) -> _Bubble:
-        bubble = _Bubble(is_user=False, max_width=self._bubble_widths()[1])
+    def _add_assistant_bubble(self, md: str | None = None, *,
+                              untrusted: bool = False) -> _Bubble:
+        bubble = _Bubble(is_user=False, max_width=self._bubble_widths()[1],
+                         untrusted=untrusted)
         if md is not None:
             bubble.set_text(md)
         self._insert_row(_BubbleRow(bubble, is_user=False))

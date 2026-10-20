@@ -126,7 +126,11 @@ def get_agent_group():
     """
     email = settings.get("auth", "email", "default")
     if email and email != "default":
-        return email.replace("@", "-")
+        # Allowlist like the darwin/windows twins: this value is interpolated
+        # into root-executed sh -c strings (enrollment, ossec.conf sed), and
+        # the settings file is writable by the unprivileged user.
+        group = re.sub(r"[^A-Za-z0-9.\-_]", "", email.replace("@", "-"))
+        return group or "default"
     return "default"
 
 def needs_reenrollment():

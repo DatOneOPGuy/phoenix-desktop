@@ -14,6 +14,8 @@ import win32event
 import servicemanager
 import win32con
 
+import hmac
+import re
 import secrets as _secrets
 import socket
 import threading
@@ -25,6 +27,10 @@ import time
 import sys
 import shutil
 from utils.i18n import get_text
+from plugins.vpn.wireguard.config_validation import (
+    SCRIPT_HOOK_KEYS,
+    is_valid_config_name,
+)
 
 
 # ---------------- Configuration ----------------
@@ -55,28 +61,41 @@ IPC_TOKEN_FILE = os.path.join(CONFIG_BASE, ".ipc_token")
 IPC_TOKEN: str = ""
 
 
-def _restrict_token_acl(token_path: str) -> None:
-    """Restrict the IPC token file's ACL on Windows via icacls.
+# Grantees must be plain account names — never groups like "Users" or
+# "Everyone" (an attacker-planted %USERNAME% could otherwise widen the grant),
+# and never contain icacls metacharacters.
+_SAFE_GRANTEE_RE = re.compile(r"^[A-Za-z0-9._-]{1,104}$")
 
-    Grants SYSTEM:F, Administrators:F, and read-only to the current user.
-    Disables inheritance so other users cannot read the token. A no-op on
-    non-Windows platforms; failures are swallowed so a flaky icacls run
-    cannot break the service or GUI.
+_DENY_GRANTEES = {"users", "everyone", "authenticated users", "guests", "interactive"}
+
+
+def _restrict_file_acl(path: str, extra_read_user: str | None = None) -> bool:
+    """Lock a secret file's ACL to SYSTEM + Administrators (plus, optionally,
+    one named user with read access) and strip inheritance.
+
+    Returns True only when icacls reports success — callers treat False as
+    fatal for secret material (the ProgramData default DACL grants
+    BUILTIN\\Users read, which must never apply to the IPC token or to
+    tunnel configs containing the WireGuard private key).
     """
     if sys.platform != "win32":
-        return
+        return True
+    cmd = [
+        "icacls", path,
+        "/inheritance:r",
+        "/grant", "*S-1-5-18:F",          # SYSTEM (SID form: locale-proof)
+        "/grant", "*S-1-5-32-544:F",      # BUILTIN\Administrators
+    ]
+    if extra_read_user:
+        if (not _SAFE_GRANTEE_RE.fullmatch(extra_read_user)
+                or extra_read_user.lower() in _DENY_GRANTEES):
+            logging.getLogger("ResistineVPN").error(
+                "Refusing ACL grant to suspicious account name")
+            return False
+        cmd += ["/grant", f"{extra_read_user}:R"]
     try:
-        import getpass
-
-        user = os.environ.get("USERNAME") or getpass.getuser()
-        subprocess.run(
-            [
-                "icacls", token_path,
-                "/inheritance:r",
-                "/grant", "SYSTEM:F",
-                "/grant", "Administrators:F",
-                "/grant", f"{user}:R",
-            ],
+        result = subprocess.run(
+            cmd,
             check=False,
             capture_output=True,
             timeout=5,
@@ -84,9 +103,20 @@ def _restrict_token_acl(token_path: str) -> None:
             # window when the service runs in a user session (debug mode).
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
+        return result.returncode == 0
     except Exception:
-        # Best-effort hardening — never fail the caller on ACL issues.
-        pass
+        return False
+
+
+def _restrict_token_acl(token_path: str) -> bool:
+    """Restrict the IPC token file's ACL. Fail-closed: see caller."""
+    import getpass
+
+    user = os.environ.get("USERNAME") or getpass.getuser()
+    # Under the SYSTEM service USERNAME is the machine account; the grant is
+    # then harmless (machine$ gets read). The GUI heals the ACL for the
+    # interactive user when it reads the token from its own session.
+    return _restrict_file_acl(token_path, extra_read_user=user)
 
 
 def _get_or_create_ipc_token() -> str:
@@ -107,7 +137,16 @@ def _get_or_create_ipc_token() -> str:
         os.makedirs(os.path.dirname(IPC_TOKEN_FILE), exist_ok=True)
         with open(IPC_TOKEN_FILE, "w") as fh:
             fh.write(token)
-        _restrict_token_acl(IPC_TOKEN_FILE)
+        if not _restrict_token_acl(IPC_TOKEN_FILE):
+            # Fail closed: a token readable by BUILTIN\Users is the key to a
+            # SYSTEM service. Better no persisted token (GUI auth fails
+            # loudly) than a world-readable one.
+            try:
+                os.remove(IPC_TOKEN_FILE)
+            except OSError:
+                pass
+            logging.getLogger("ResistineVPN").error(
+                "Could not restrict IPC token ACL — token not persisted")
     except OSError as e:
         logging.getLogger("ResistineVPN").error("Could not persist IPC token: %s", e)
     return token
@@ -311,6 +350,21 @@ def _ensure_system_config(tunnel: str, source_conf: str) -> str:
     """
     system_conf = os.path.join(CONFIG_BASE, f"{tunnel}.conf")
 
+    # Refuse configs carrying script hooks: WireGuard-for-Windows won't run
+    # them without DangerousScriptExecutionAllowed, but a SYSTEM service
+    # should never install one regardless of registry state.
+    try:
+        with open(source_conf, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                key = line.split("=", 1)[0].strip().lower()
+                if key in SCRIPT_HOOK_KEYS:
+                    logger.error(
+                        f"Refusing config with script hook '{key}' for '{tunnel}'"
+                    )
+                    return source_conf  # install will fail safely downstream
+    except OSError:
+        pass
+
     # Already in ProgramData — nothing to do
     if os.path.abspath(source_conf) == os.path.abspath(system_conf):
         return system_conf
@@ -318,6 +372,15 @@ def _ensure_system_config(tunnel: str, source_conf: str) -> str:
     try:
         os.makedirs(CONFIG_BASE, exist_ok=True)
         shutil.copy2(source_conf, system_conf)
+        # The .conf contains the WireGuard PrivateKey; ProgramData's default
+        # DACL grants BUILTIN\\Users read. Lock it to SYSTEM+Administrators.
+        if not _restrict_file_acl(system_conf):
+            logger.error("Could not restrict config ACL — removing copy")
+            try:
+                os.remove(system_conf)
+            except OSError:
+                pass
+            return source_conf
         logger.info(
             f"Copied config for '{tunnel}' to ProgramData: {system_conf}"
         )
@@ -412,19 +475,46 @@ def status_tunnel(tunnel: str) -> str:
 
 # ---------------- IPC Handler ----------------
 
+def _validated_config_path(tunnel: str, config_path) -> str | None:
+    """Confine the caller-supplied config path.
+
+    The IPC peer is any local process that knows the token, and this service
+    runs as SYSTEM — so a raw path here is an arbitrary-file-read/copy
+    primitive. Require: a real file, a .conf extension, and a basename that
+    matches the (already-validated) tunnel name. Everything else falls back
+    to the ProgramData copy for that tunnel.
+    """
+    if not config_path or not isinstance(config_path, str):
+        return None
+    path = os.path.abspath(config_path)
+    if (os.path.isfile(path)
+            and os.path.basename(path) == f"{tunnel}.conf"):
+        return path
+    logger.warning("Rejecting config_path outside the expected shape")
+    return None
+
+
 def handle_request(request: dict) -> dict:
-    if request.get("token") != IPC_TOKEN:
+    supplied = request.get("token")
+    if (not isinstance(supplied, str)
+            or not hmac.compare_digest(supplied, IPC_TOKEN)):
         return {"status": "error", "message": get_text("vpn.wireguard.windows_vpn_service.unauthorized")}
 
     cmd         = request.get("command")
     tunnel      = request.get("tunnel")
-    config_path = request.get("config_path")
 
     if cmd not in ALLOWED_COMMANDS:
         return {"status": "error", "message": get_text("vpn.wireguard.windows_vpn_service.invalid_command_cmd", cmd=cmd)}
 
     if not tunnel:
         return {"status": "error", "message": get_text("vpn.wireguard.windows_vpn_service.missing_tunnel")}
+
+    # The tunnel name is interpolated into service names and ProgramData
+    # paths by a SYSTEM process — reject separators, "..", flag-like names.
+    if not is_valid_config_name(tunnel):
+        return {"status": "error", "message": "Invalid tunnel name"}
+
+    config_path = _validated_config_path(tunnel, request.get("config_path"))
 
     try:
         if cmd == "status":

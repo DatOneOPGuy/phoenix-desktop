@@ -148,7 +148,11 @@ def init_updater(app):
             _ED25519_PUBLIC_KEY.encode("utf-8")
         )
         if result != 1:
-            logger.warning(get_text("utils.updates.windows.winsparkle_eddsa_public_key_was"))
+            # Fail closed: WinSparkle without an accepted EdDSA key performs
+            # NO signature verification, and its install callback runs the
+            # downloaded EXE elevated and silent. No key — no updater.
+            logger.error(get_text("utils.updates.windows.winsparkle_eddsa_public_key_was"))
+            return False
 
         _dll.win_sparkle_set_automatic_check_for_updates(1)
         _dll.win_sparkle_set_update_check_interval(14400)  # 4 hours

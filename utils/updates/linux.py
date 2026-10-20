@@ -191,11 +191,22 @@ def _start_download(item: AppcastItem, dialog):
 
 def _download_worker(item: AppcastItem, dialog):
     """Background thread: download, verify signature, apply update."""
-    tmp_dir = os.path.join(tempfile.gettempdir(), "resistine-update")
-    os.makedirs(tmp_dir, exist_ok=True)
+    # Fresh 0700 directory per download: a fixed, pre-creatable path in the
+    # shared /tmp lets another local user pre-plant a symlink (write-anywhere)
+    # or swap the archive between verify and extract (TOCTOU).
+    tmp_dir = tempfile.mkdtemp(prefix="phoenix-update-")
     tmp_path = os.path.join(tmp_dir, "update.tar.gz")
 
     try:
+        # The appcast is remote input: never fetch an enclosure over
+        # anything but HTTPS, whatever the XML says.
+        if not str(item.download_url).startswith("https://"):
+            _app.after(
+                0, dialog.show_error,
+                "Update refused: download URL is not HTTPS.", None,
+            )
+            return
+
         # --- Download with progress ---
         resp = requests.get(
             item.download_url, stream=True, timeout=(30, 120)
@@ -234,22 +245,32 @@ def _download_worker(item: AppcastItem, dialog):
             0, dialog.set_download_progress, 1.0, "Verifying signature..."
         )
 
-        # --- Verify Ed25519 signature ---
-        if item.signature:
-            if not _verify_signature(tmp_path, item.signature):
-                _app.after(
-                    0,
-                    dialog.show_error,
-                    "Signature verification failed. The download may be "
-                    "corrupted or tampered with.",
-                    lambda: _start_download(item, dialog),
-                )
-                _cleanup(tmp_path)
-                return
-        else:
-            logger.warning(
-                get_text("utils.updates.linux.update_linux_no_signature_in")
+        # --- Verify Ed25519 signature (MANDATORY) ---
+        # The signature attribute comes from the same untrusted XML as the
+        # download URL. Treating its absence as "skip verification" would let
+        # anyone who can influence the feed ship unsigned code — so a missing
+        # signature is a hard failure, exactly like a bad one.
+        if not item.signature:
+            logger.error(
+                "[UPDATE-LINUX] Appcast entry has no edSignature — refusing "
+                "unsigned update."
             )
+            _app.after(
+                0, dialog.show_error,
+                "Update refused: the update feed entry is unsigned.", None,
+            )
+            _cleanup(tmp_path)
+            return
+        if not _verify_signature(tmp_path, item.signature):
+            _app.after(
+                0,
+                dialog.show_error,
+                "Signature verification failed. The download may be "
+                "corrupted or tampered with.",
+                lambda: _start_download(item, dialog),
+            )
+            _cleanup(tmp_path)
+            return
 
         # --- Apply update ---
         _app.after(
@@ -354,7 +375,9 @@ def _apply_update(archive_path: str) -> tuple[bool, str]:
                 dest = os.path.normpath(
                     os.path.join(project_root, member.name)
                 )
-                if not dest.startswith(os.path.normpath(project_root)):
+                root = os.path.normpath(project_root)
+                # commonpath, not startswith: "/app-evil" startswith "/app".
+                if os.path.commonpath([root, dest]) != root:
                     logger.warning(
                         f"[UPDATE-LINUX] Skipping path traversal: "
                         f"{member.name}"
@@ -409,9 +432,15 @@ def _restart_app():
 
 
 def _cleanup(path: str):
-    """Remove a temporary file, ignoring errors."""
+    """Remove a temporary file and its per-download directory, ignoring errors."""
     try:
         if os.path.exists(path):
             os.unlink(path)
+    except OSError:
+        pass
+    try:
+        parent = os.path.dirname(path)
+        if os.path.basename(parent).startswith("phoenix-update-"):
+            os.rmdir(parent)
     except OSError:
         pass

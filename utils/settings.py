@@ -164,12 +164,16 @@ def _save_json(namespace: str, data: Dict[str, Any]) -> bool:
     file_path = _get_file_path(namespace)
     try:
         with _lock:
-            with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=4, ensure_ascii=False)
-
-            # Ensure secure permissions on the file
+            # Create 0600 from the first byte (chmod-after-write leaves a
+            # umask-mode window where another process could open the file).
             if platform.system() != "Windows":
-                os.chmod(file_path, 0o600)
+                fd = os.open(file_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=4, ensure_ascii=False)
+                os.chmod(file_path, 0o600)  # heal pre-existing looser modes
+            else:
+                with open(file_path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=4, ensure_ascii=False)
         return True
     except OSError as e:
         logger.error(f"Failed to save settings to {file_path}: {e}")
@@ -250,8 +254,13 @@ def get_secret(namespace: str, key: str) -> Optional[str]:
         return None
 
     if not stored_value.startswith(ENCRYPTED_PREFIX):
-        logger.warning(get_text("utils.settings.value_for_namespace_key_is", namespace=namespace, key=key))
-        return stored_value  # Return as-is if not marked encrypted (legacy support?)
+        # Fail closed. Accepting un-prefixed plaintext would let anyone with
+        # config-file write substitute a secret of their choosing (e.g. plant
+        # a known API key or repoint the Matrix store key) and have it
+        # accepted silently. A legacy plaintext value should be re-entered by
+        # the user, not trusted.
+        logger.error(get_text("utils.settings.value_for_namespace_key_is", namespace=namespace, key=key))
+        return None
 
     try:
         encrypted_data = stored_value[len(ENCRYPTED_PREFIX) :]

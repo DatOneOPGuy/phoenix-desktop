@@ -159,11 +159,12 @@ class TestSecrets:
         result = isolated_settings.get_secret("myns", "nonexistent")
         assert result is None
 
-    def test_get_secret_unencrypted_returns_as_is(self, isolated_settings):
-        """Legacy: plain values stored without ENC: prefix are returned as-is."""
+    def test_get_secret_unencrypted_fails_closed(self, isolated_settings):
+        """Un-prefixed values are rejected: accepting plaintext would let a
+        config-file writer substitute secrets of their choosing."""
         isolated_settings.set("myns", "plain", "plaintext_value")
         result = isolated_settings.get_secret("myns", "plain")
-        assert result == "plaintext_value"
+        assert result is None
 
     def test_secrets_survive_namespace_reload(self, isolated_settings):
         isolated_settings.set_secret("myns", "key", "persistent")

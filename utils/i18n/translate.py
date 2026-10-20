@@ -156,7 +156,7 @@ def translate_file(source_lang, target_lang, base_dir, dry_run=False, force=Fals
             target_data[key] = translated
             logger.info(f"  ✓ {translated[:60]}{'...' if len(translated) > 60 else ''}")
         else:
-            logger.error(f"  ✗ Translation failed")
+            logger.error("  ✗ Translation failed")
     
     # Save updated target file
     with open(target_file, 'w', encoding='utf-8') as f:

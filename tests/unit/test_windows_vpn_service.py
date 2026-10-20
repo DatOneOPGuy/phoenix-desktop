@@ -378,16 +378,31 @@ class TestHandleRequest:
                         result = self._request(cmd)
         assert "invalid command" not in result.get("message", "").lower()
 
-    def test_connect_passes_config_path(self):
-        """connect must forward config_path to install_tunnel."""
+    def test_connect_passes_validated_config_path(self, tmp_path):
+        """connect forwards config_path to install_tunnel only when it is a
+        real .conf whose basename matches the tunnel; junk paths become None
+        (ProgramData fallback) instead of reaching the SYSTEM copy."""
+        conf = tmp_path / "wg0.conf"
+        conf.write_text("[Interface]\n")
         with patch("plugins.vpn.wireguard.windows_vpn_service.status_tunnel",
                    side_effect=["Not Installed", "Running", "Running"]):
             with patch("plugins.vpn.wireguard.windows_vpn_service.install_tunnel",
                        return_value=(True, "Installed")) as mock_install:
                 with patch("plugins.vpn.wireguard.windows_vpn_service.start_tunnel",
                            return_value=(True, "Started")):
-                    self._request("connect", config_path="/user/appdata/wg0.conf")
-        mock_install.assert_called_once_with("wg0", "/user/appdata/wg0.conf")
+                    self._request("connect", config_path=str(conf))
+        mock_install.assert_called_once_with("wg0", str(conf))
+
+    def test_connect_drops_mismatched_config_path(self):
+        """A config_path that doesn't match the tunnel is not forwarded."""
+        with patch("plugins.vpn.wireguard.windows_vpn_service.status_tunnel",
+                   side_effect=["Not Installed", "Running", "Running"]):
+            with patch("plugins.vpn.wireguard.windows_vpn_service.install_tunnel",
+                       return_value=(True, "Installed")) as mock_install:
+                with patch("plugins.vpn.wireguard.windows_vpn_service.start_tunnel",
+                           return_value=(True, "Started")):
+                    self._request("connect", config_path="/user/appdata/other.conf")
+        mock_install.assert_called_once_with("wg0", None)
 
 
 # ===========================================================================

@@ -62,8 +62,11 @@ class TestSaveJsonErrors:
         ro_dir.mkdir()
 
         with patch.object(s, "get_config_dir", return_value=str(ro_dir)):
-            # Make the file path point to a non-writable location
-            with patch("builtins.open", side_effect=OSError("read-only fs")):
+            # Make the file path point to a non-writable location. The POSIX
+            # path writes via os.open (0600 from the first byte); Windows via
+            # builtins.open — block both.
+            with patch("builtins.open", side_effect=OSError("read-only fs")), \
+                 patch("os.open", side_effect=OSError("read-only fs")):
                 result = s._save_json("test_ns", {"key": "val"})
         assert result is False
 
@@ -201,12 +204,14 @@ class TestSecretErrors:
         result = s.get_secret("ns", "nonexistent")
         assert result is None
 
-    def test_get_secret_unencrypted_legacy(self, isolated_settings):
+    def test_get_secret_unencrypted_fails_closed(self, isolated_settings):
+        """Un-prefixed values are rejected — accepting plaintext would let a
+        config-file writer substitute secrets of their choosing."""
         import utils.settings as s
 
         s.set("ns", "key", "plaintext-value")
         result = s.get_secret("ns", "key")
-        assert result == "plaintext-value"
+        assert result is None
 
 
 # ---------------------------------------------------------------------------

@@ -206,17 +206,24 @@ jobs:
           mkdir -p ~/.ssh
           echo "$DEPLOY_KEY" > ~/.ssh/pages_key
           chmod 600 ~/.ssh/pages_key
-          export GIT_SSH_COMMAND="ssh -i ~/.ssh/pages_key -o StrictHostKeyChecking=no"
+          # Pin GitHub's SSH host keys: the deploy key must never be offered
+          # to an unauthenticated host (MITM on the runner's network).
+          ssh-keyscan -t ed25519,ecdsa,rsa github.com >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/pages_key -o StrictHostKeyChecking=yes"
 
           git clone git@github.com:Resistine/resistine.github.io.git /tmp/pages
           cd /tmp/pages
 
           # Insert new item after the comment block (before first existing <item>)
-          python3 -c "
-          import re
+          # NEW_ITEM is derived from the tag name and the signing step; pass
+          # it via the environment, never by shell-expanding it into Python
+          # source (a crafted tag containing quotes would otherwise execute
+          # code in the job that holds the signing secrets).
+          NEW_ITEM="$NEW_ITEM" python3 -c "
+          import os
           with open('appcast.xml', 'r') as f:
               content = f.read()
-          new_item = '''$NEW_ITEM'''
+          new_item = os.environ['NEW_ITEM']
           # Insert before the first <item> tag
           content = content.replace('<item>', new_item + '\n    <item>', 1)
           with open('appcast.xml', 'w') as f:
