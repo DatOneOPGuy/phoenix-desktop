@@ -131,12 +131,16 @@ QToolTip {{
 }}
 #NavButton {{
     background-color: transparent; border: none; border-radius: 12px;
-    padding: 0;
+    padding: 0 0 0 6px; text-align: left;
 }}
 #NavButton:hover {{ background-color: {c('sidebar_hover_bg')}; }}
 #NavButton:checked {{
     background-color: {c('sidebar_active_bg')};
-    border-left: 3px solid {c('accent')};
+    border-left: 3px solid {c('accent')}; padding-left: 3px;
+}}
+QLabel#NavLabel {{
+    background: transparent; color: {c('text_primary')};
+    font-size: 14px; font-weight: 600;
 }}
 
 #Card {{
