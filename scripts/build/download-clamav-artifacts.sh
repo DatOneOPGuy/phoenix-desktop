@@ -35,10 +35,16 @@ fetch_latest_artifact_info() {
 }
 
 get_remote_sha() {
+    # Only trust output that looks like a commit SHA — on HTTP errors gh can
+    # emit JSON error text on stdout, which must not masquerade as a version.
     if [ -z "${LATEST_SHA+x}" ]; then
         fetch_latest_artifact_info
     fi
-    echo "$LATEST_SHA"
+    sha="$LATEST_SHA"
+    case "$sha" in
+        *[!0-9a-f]*|"") echo "" ;;
+        *) [ ${#sha} -eq 40 ] && echo "$sha" || echo "" ;;
+    esac
 }
 
 get_artifact_name() {

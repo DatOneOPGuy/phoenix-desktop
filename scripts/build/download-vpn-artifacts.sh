@@ -26,8 +26,13 @@ fi
 
 # Query the latest artifact's commit SHA from CI
 get_remote_sha() {
-    gh api "repos/$REPO/actions/artifacts?name=vpn-macos-latest&per_page=1" \
-        --jq '.artifacts[0].workflow_run.head_sha' 2>/dev/null || echo ""
+    # Only trust output that looks like a commit SHA — on HTTP errors gh can
+    # emit JSON error text on stdout, which must not masquerade as a version.
+    sha=$(gh api "repos/$REPO/actions/artifacts?name=vpn-macos-latest&per_page=1"  --jq '.artifacts[0].workflow_run.head_sha' 2>/dev/null) || sha=""
+    case "$sha" in
+        *[!0-9a-f]*|"") echo "" ;;
+        *) [ ${#sha} -eq 40 ] && echo "$sha" || echo "" ;;
+    esac
 }
 
 # Read local version
