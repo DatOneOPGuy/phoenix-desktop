@@ -79,6 +79,13 @@ else
     if [ -n "$REMOTE_SHA" ]; then
         echo "Downloading VPN artifacts (${REMOTE_SHA:0:12})..."
     else
+        # CI unreachable (artifact repo is mid-migration to Phoenix infra).
+        # Never wipe a working local copy just because we can't check it.
+        if [ -f "$ARTIFACTS_DIR/resistine-vpn-cli" ] \
+           && [ -d "$ARTIFACTS_DIR/com.resistine.desktop.network-extension.systemextension" ]; then
+            echo "CI unreachable — using existing local VPN artifacts."
+            exit 0
+        fi
         echo "Downloading latest VPN artifacts from main..."
     fi
     DOWNLOAD_SHA="$REMOTE_SHA"

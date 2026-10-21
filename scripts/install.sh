@@ -201,10 +201,10 @@ Darwin*)
 		python3 -m venv .venv
 	fi
 
-	# Build the distribution (sign, create DMG, notarize)
-	echo ""
-	echo "Running distribution build..."
-	./scripts/build/build-distribution.sh
+	# Dev install stops here — run.sh (called below) installs the Python
+	# dependencies into the venv and launches the app from source.
+	# For a signed/notarized release build run:
+	#   ./scripts/build/build-distribution.sh
 	;;
 
 # Windows (Git Bash, Cygwin, MSYS2)
