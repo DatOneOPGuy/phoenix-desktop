@@ -37,7 +37,7 @@ from PyQt6.QtCore import (
     QTimer,
     pyqtSignal,
 )
-from PyQt6.QtGui import QCursor
+from PyQt6.QtGui import QCursor, QIcon
 from PyQt6.QtWidgets import (
     QApplication,
     QStyle,
@@ -55,6 +55,7 @@ from PyQt6.QtWidgets import (
 )
 
 from gui import theme
+from gui.page_kit import line_icon
 from plugins.base_plugin import BasePlugin
 from plugins.chat import siem_alerts
 from plugins.chat.history import ChatHistoryManager
@@ -223,9 +224,12 @@ class _Bubble(QFrame):
             | Qt.TextInteractionFlag.LinksAccessibleByMouse)
         self._view.document().setDocumentMargin(3)
         self._view.document().setDefaultStyleSheet(stylesheet(self._fg))
+        # padding: 0 overrides the app-wide QTextEdit padding (7px 10px),
+        # which would shrink the viewport below the width _fit_height lays
+        # the document out at and clip the end of every line.
         self._view.setStyleSheet(
             "QTextBrowser#ChatBubbleText { background: transparent; "
-            f"border: none; color: {self._fg}; font-size: 14px; }}")
+            f"border: none; padding: 0; color: {self._fg}; font-size: 14px; }}")
         # Fixed full-column width from the start: only height grows as text
         # streams in, so there is zero horizontal jitter (the old width-lock,
         # now inherent to the sized browser).
@@ -887,7 +891,7 @@ class Plugin(BasePlugin):
         lay.setContentsMargins(12, 6, 12, 6)
         lay.setSpacing(8)
 
-        self._toggle_btn = self._icon_button("☰")  # hamburger
+        self._toggle_btn = self._icon_button("menu")  # hamburger
         self._toggle_btn.clicked.connect(self._toggle_sidebar)
         lay.addWidget(self._toggle_btn)
 
@@ -899,19 +903,21 @@ class Plugin(BasePlugin):
         lay.addWidget(title)
         lay.addStretch(1)
 
-        self._new_chat_btn = self._icon_button("+")
+        self._new_chat_btn = self._icon_button("plus")
         self._new_chat_btn.clicked.connect(self._new_chat)
         lay.addWidget(self._new_chat_btn)
         return bar
 
-    def _icon_button(self, text: str) -> QPushButton:
-        btn = QPushButton(text)
+    def _icon_button(self, icon: str) -> QPushButton:
+        # A Lucide icon, not a text glyph: glyphs like ☰ sit off-centre by
+        # however the font sets their bearings and baseline.
+        btn = QPushButton()
         btn.setObjectName("Secondary")
         btn.setFixedSize(32, 32)
         btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        btn.setStyleSheet(
-            "QPushButton { font-size: 18px; font-weight: 700; padding: 0; "
-            "border-radius: 8px; }")
+        btn.setIcon(QIcon(line_icon(icon, size=18)))
+        btn.setIconSize(QSize(18, 18))
+        btn.setStyleSheet("QPushButton { padding: 0; border-radius: 8px; }")
         return btn
 
     # ---- Message area -----------------------------------------------------
