@@ -39,7 +39,7 @@ def move_to_applications() -> bool:
     src = _get_bundle_path()
     if not src:
         return False
-    app_name = os.path.basename(src)  # e.g. "Resistine.app"
+    app_name = os.path.basename(src)  # e.g. "Phoenix.app"
     dest = os.path.join("/Applications", app_name)
 
     try:

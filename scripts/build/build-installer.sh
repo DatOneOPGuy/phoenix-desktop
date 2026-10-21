@@ -135,7 +135,7 @@ if [ ! -f "packaging/Resistine.spec" ]; then
 fi
 
 # Clean dist directory to avoid conflicts
-rm -rf dist/Resistine dist/Resistine.app dist/Phoenix dist/Phoenix.app
+rm -rf dist/Resistine dist/Phoenix.app dist/Phoenix dist/Phoenix.app
 
 # Build with PyInstaller using the spec file
 echo "  - Building with PyInstaller..."
@@ -403,8 +403,8 @@ fi
 echo ""
 echo "Step 7: Installing to /Applications..."
 
-# Remove old installation if it exists (and the pre-rebrand Resistine.app)
-rm -rf "/Applications/Resistine.app" 2>/dev/null || true
+# Remove old installation if it exists (and the pre-rebrand Phoenix.app)
+rm -rf "/Applications/Phoenix.app" 2>/dev/null || true
 if [ -d "/Applications/$APP_NAME.app" ]; then
     echo "  - Removing old /Applications/$APP_NAME.app..."
     rm -rf "/Applications/$APP_NAME.app" || {

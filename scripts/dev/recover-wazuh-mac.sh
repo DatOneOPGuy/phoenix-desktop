@@ -10,7 +10,7 @@
 #   2. Stop any straggler wazuh-* daemons (graceful — NO SIGKILL on agentd).
 #   3. Wipe /Library/Ossec, the client.keys file backup, and the System
 #      Keychain entry, so the next install enrolls fresh.
-#   4. Clear the Resistine app's stored install state so the UI no longer
+#   4. Clear the Phoenix app's stored install state so the UI no longer
 #      thinks the agent is installed.
 #
 # AFTER running this script you ALSO need to delete the manager-side

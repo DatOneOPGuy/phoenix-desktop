@@ -760,7 +760,7 @@ def _remove_keychain_items():
 
 
 def _collect_app_bundle_admin_cmd(admin_cmds):
-    """Append the ``rm -rf /Applications/Resistine.app`` command into
+    """Append the ``rm -rf /Applications/Phoenix.app`` command into
     ``admin_cmds`` so it runs in the SAME osascript prompt as everything
     else. Previously the bundle removal had its own prompt — the third
     of the user's three password requests.

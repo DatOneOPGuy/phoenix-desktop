@@ -94,7 +94,7 @@ fi
 # ============================================================
 
 # ---- 1. Stop the running app ----
-step "[1/7] Stopping Resistine app processes..."
+step "[1/7] Stopping Phoenix app processes..."
 pkill -TERM -u "$REAL_USER" -f "[m]ain.py" 2>/dev/null && ok "Signalled app to stop" || info "No running app found"
 sleep 1
 

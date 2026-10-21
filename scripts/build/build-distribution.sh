@@ -233,7 +233,7 @@ if [ ! -f "packaging/Resistine.spec" ]; then
     exit 1
 fi
 
-rm -rf dist/Resistine dist/Resistine.app dist/Phoenix dist/Phoenix.app
+rm -rf dist/Resistine dist/Phoenix.app dist/Phoenix dist/Phoenix.app
 
 echo "  - Building with PyInstaller..."
 pyinstaller packaging/Resistine.spec --noconfirm
@@ -1028,14 +1028,14 @@ cat > "$PKG_SCRIPTS_DIR/preinstall" << 'PREEOF'
 # screen. Launching from this script would run the app as root.
 
 # Quit the app gracefully, then force-kill any stragglers, before removing it.
-# Builds before the rename installed it as Resistine.app; remove that too.
+# Builds before the rename installed it as Phoenix.app; remove that too.
 for name in Phoenix Resistine; do
     osascript -e "quit app \"$name\"" 2>/dev/null || true
     pkill -x "$name" 2>/dev/null || true
 done
 sleep 1
 
-for app in /Applications/Phoenix.app /Applications/Resistine.app; do
+for app in /Applications/Phoenix.app /Applications/Phoenix.app; do
     [ -d "$app" ] && rm -rf "$app" 2>/dev/null
 done
 true
@@ -1285,7 +1285,7 @@ rm -f /tmp/ne-distribution.entitlements.plist /tmp/cli-distribution.entitlements
 echo ""
 echo "Step 8: Installing to /Applications..."
 
-rm -rf "/Applications/Resistine.app" 2>/dev/null || true  # pre-rename bundle
+rm -rf "/Applications/Phoenix.app" 2>/dev/null || true  # pre-rename bundle
 if [ -d "/Applications/$APP_NAME.app" ]; then
     echo "  - Removing old /Applications/$APP_NAME.app..."
     rm -rf "/Applications/$APP_NAME.app" || {
