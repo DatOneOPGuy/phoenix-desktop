@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate Resistine's SBOM and human-readable license attribution doc.
+"""Generate Phoenix's SBOM and human-readable license attribution doc.
 
 Produces TWO artifacts at the repo root:
 
@@ -43,8 +43,8 @@ Direct mode (you handle the venv isolation yourself)::
 CI runs the direct form against a clean venv it provisions per job and
 verifies the committed files match with ``--check``.
 
-Author: Resistine Team
-Copyright (c) Resistine 2026
+Author: Phoenix Team
+Copyright (c) Phoenix 2026
 Licensed under the GNU General Public License v2 or later
 """
 
@@ -144,7 +144,7 @@ def enforce_policy(sbom: dict) -> None:
     if violations:
         sys.stderr.write(
             "\nERROR: Components with licenses incompatible with the\n"
-            "GPL-2.0-or-later distribution of Resistine were found:\n\n"
+            "GPL-2.0-or-later distribution of Phoenix were found:\n\n"
             + "\n".join(violations)
             + "\n\nRemove or replace these dependencies before continuing.\n"
         )
