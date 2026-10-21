@@ -1,8 +1,9 @@
 """AppWindow — the PyQt6 host shell.
 
-The Qt counterpart of the old ``gui/user_interface.py`` ``AppUI``: a 250 px
+The Qt counterpart of the old ``gui/user_interface.py`` ``AppUI``: an icon
 sidebar (logo + one checkable nav button per plugin) beside a ``QStackedWidget``
-content area, with plugins discovered via ``PluginManager``.
+content area, with plugins discovered via ``PluginManager``. The sidebar is an
+icon rail that slides open over the content on hover to show section names.
 
 It also exposes a small set of **Tk-compatibility shims** (``after`` /
 ``after_cancel`` / ``show_notification`` / ``select_frame_by_name`` /
@@ -23,11 +24,13 @@ import threading
 
 from PyQt6.QtCore import (
     QEasingCurve,
+    QEvent,
     QPropertyAnimation,
     QRectF,
     QSize,
     Qt,
     QTimer,
+    QVariantAnimation,
     pyqtSignal,
     pyqtSlot,
 )
@@ -37,6 +40,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QGraphicsBlurEffect,
     QGraphicsDropShadowEffect,
+    QGraphicsOpacityEffect,
     QGraphicsPixmapItem,
     QGraphicsScene,
     QHBoxLayout,
@@ -83,6 +87,89 @@ def _blur(img: QImage, radius: float) -> QImage:
     scene.render(p, rect, rect)
     p.end()
     return out
+
+
+class NavRail(QFrame):
+    """The sidebar: an icon rail that slides open over the page on hover.
+
+    It floats above the content (a fixed-width placeholder holds its place
+    in the shell layout), so opening it never relays out the current page.
+    Each nav button's name label sits just past the collapsed edge: the
+    widening rail uncovers it while it fades in, and the icons stay put.
+    """
+
+    COLLAPSED = 76
+    EXPANDED = 212
+    _OPEN_DELAY_MS = 120  # hover intent: brushing past doesn't open it
+    _ANIM_MS = 200
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setObjectName("Sidebar")
+        self._open = 0.0  # 0 = collapsed, 1 = expanded
+        self._fades: list[QGraphicsOpacityEffect] = []
+        self._anim = QVariantAnimation(self)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim.valueChanged.connect(self._apply)
+        self._open_timer = QTimer(self)
+        self._open_timer.setSingleShot(True)
+        self._open_timer.setInterval(self._OPEN_DELAY_MS)
+        self._open_timer.timeout.connect(lambda: self._animate_to(1.0))
+        parent.installEventFilter(self)  # follow the shell's height
+        self.setGeometry(0, 0, self.COLLAPSED, parent.height())
+
+    def add_label(self, btn: QPushButton, text: str) -> None:
+        """Give ``btn`` a name label that is revealed as the rail opens."""
+        label = QLabel(text, btn)
+        label.setObjectName("NavLabel")
+        label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        label.adjustSize()
+        label.move(self.COLLAPSED - 24, (btn.height() - label.height()) // 2)
+        fade = QGraphicsOpacityEffect(label)
+        fade.setOpacity(self._label_opacity(self._open))
+        label.setGraphicsEffect(fade)
+        self._fades.append(fade)
+
+    def eventFilter(self, obj, event):  # noqa: N802 (Qt override)
+        if obj is self.parent() and event.type() == QEvent.Type.Resize:
+            self.resize(self.width(), event.size().height())
+        return False
+
+    def enterEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().enterEvent(event)
+        self._open_timer.start()
+
+    def leaveEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().leaveEvent(event)
+        self._open_timer.stop()
+        self._animate_to(0.0)
+
+    def _animate_to(self, target: float) -> None:
+        self._anim.stop()
+        span = abs(target - self._open)
+        if span == 0:
+            return
+        self._anim.setDuration(max(1, int(self._ANIM_MS * span)))
+        self._anim.setStartValue(self._open)
+        self._anim.setEndValue(target)
+        self._anim.start()
+
+    @staticmethod
+    def _label_opacity(t: float) -> float:
+        # Labels start fading in once the rail is a quarter open, so text
+        # never shows squeezed against the collapsed edge.
+        return min(1.0, max(0.0, (t - 0.25) / 0.75))
+
+    def _apply(self, t) -> None:
+        self._open = float(t)
+        width = self.COLLAPSED + (self.EXPANDED - self.COLLAPSED) * self._open
+        self.resize(round(width), self.height())
+        opacity = self._label_opacity(self._open)
+        for fade in self._fades:
+            try:
+                fade.setOpacity(opacity)
+            except RuntimeError:  # button deleted by a shell rebuild
+                pass
 
 
 def glow_icon(icon: QIcon, color: str | None) -> QIcon:
@@ -244,22 +331,27 @@ class AppWindow(QMainWindow):
         self._build_sidebar(layout)
         self.stack = QStackedWidget()
         layout.addWidget(self.stack, 1)
+        self.sidebar.raise_()  # the rail opens over the page, not under it
         self.setCentralWidget(root)
 
     # ---- Sidebar ----------------------------------------------------------
-    # Icon-only rail: the plugin name is the tooltip and accessible name.
-    SIDEBAR_WIDTH = 76
+    # Icon rail that shows each plugin's name on hover (see NavRail).
+    SIDEBAR_WIDTH = NavRail.COLLAPSED
 
     def _build_sidebar(self, layout: QHBoxLayout) -> None:
-        self.sidebar = QFrame()
-        self.sidebar.setObjectName("Sidebar")
-        self.sidebar.setFixedWidth(self.SIDEBAR_WIDTH)
+        # The rail floats over the content; this placeholder keeps the
+        # content clear of its collapsed width.
+        placeholder = QWidget()
+        placeholder.setFixedWidth(self.SIDEBAR_WIDTH)
+        layout.addWidget(placeholder)
+        self.sidebar = NavRail(layout.parentWidget())
         sb = QVBoxLayout(self.sidebar)
         sb.setContentsMargins(12, 18, 12, 16)
         sb.setSpacing(6)
-        sb.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
-        sb.addWidget(self._logo_widget(), 0, Qt.AlignmentFlag.AlignHCenter)
+        logo = self._logo_widget()
+        logo.setFixedWidth(self.SIDEBAR_WIDTH - 24)  # stays put as it opens
+        sb.addWidget(logo, 0, Qt.AlignmentFlag.AlignLeft)
         sb.addSpacing(14)
 
         self._nav_group = QButtonGroup(self)
@@ -271,13 +363,16 @@ class AppWindow(QMainWindow):
             btn = QPushButton()
             btn.setObjectName("NavButton")
             btn.setCheckable(True)
-            btn.setFixedSize(52, 48)
+            # Fills the rail's width; the icon is pinned left (theme QSS)
+            # so it doesn't move as the rail opens.
+            btn.setFixedHeight(48)
+            btn.setMinimumWidth(self.SIDEBAR_WIDTH - 24)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             size = NAV_ICON + 2 * NAV_GLOW_PAD
             btn.setIconSize(QSize(size, size))
             btn.setIcon(self._nav_icon(p))
-            btn.setToolTip(p.get_name())
             btn.setAccessibleName(p.get_name())
+            self.sidebar.add_label(btn, p.get_name())
             btn.clicked.connect(
                 lambda _=False, n=p.get_name(): self.select_frame_by_name(
                     f"frame_{n}"))
@@ -288,12 +383,11 @@ class AppWindow(QMainWindow):
             if p.order >= 1000:
                 bottom.append(btn)
             else:
-                sb.addWidget(btn, 0, Qt.AlignmentFlag.AlignHCenter)
+                sb.addWidget(btn)
 
         sb.addStretch(1)
         for btn in bottom:
-            sb.addWidget(btn, 0, Qt.AlignmentFlag.AlignHCenter)
-        layout.addWidget(self.sidebar)
+            sb.addWidget(btn)
         self._nav_status = {}
         self._refresh_nav_status()
         self._nav_status_timer.start()
