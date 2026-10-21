@@ -35,7 +35,7 @@ COLOR_CARD_BORDER = None                      # use CTk default
 # requested dozens of times during a single plugin build, so cache them.
 # Theme tuples are static for a given appearance mode; if appearance changes
 # the cache is invalidated via clear_theme_cache() (called from
-# refresh_ui_theme in gui/user_interface.py).
+# the shell's theme refresh).
 _FONT_CACHE: dict = {}
 _THEME_CACHE: dict = {}
 
@@ -64,7 +64,7 @@ def _theme_token(name: str):
 def clear_theme_cache():
     """Invalidate the font + theme-token caches.
 
-    Called from gui.user_interface.refresh_ui_theme() so theme switches pick
+    Called on theme switches so re-renders pick
     up new colors. The plugin's full widget tree is rebuilt right after, so
     the next builder pass repopulates the caches.
     """
