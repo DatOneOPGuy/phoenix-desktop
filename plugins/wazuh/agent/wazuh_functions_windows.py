@@ -35,7 +35,7 @@ from utils.i18n import get_text
 
 _OSSEC_CONF = os.path.join(WINDOWS_WAZUH_DIR, "ossec.conf")
 _CLIENT_KEYS = os.path.join(WINDOWS_WAZUH_DIR, "client.keys")
-_KEY_BACKUP = os.path.join(os.environ.get("APPDATA", ""), "Phoenix", "wazuh_client.keys")
+_KEY_BACKUP = os.path.join(os.environ.get("APPDATA", ""), "Resistine", "wazuh_client.keys")
 _AGENT_AUTH = os.path.join(WINDOWS_WAZUH_DIR, "agent-auth.exe")
 _SERVICE_NAME = "WazuhSvc"
 

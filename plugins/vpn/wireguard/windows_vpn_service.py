@@ -187,7 +187,7 @@ def _get_log_file() -> str:
         return programdata_log
     except PermissionError:
         appdata_log = os.path.join(
-            os.environ.get("APPDATA", ""), "Phoenix", "vpn_service.log"
+            os.environ.get("APPDATA", ""), "Resistine", "vpn_service.log"
         )
         os.makedirs(os.path.dirname(appdata_log), exist_ok=True)
         return appdata_log

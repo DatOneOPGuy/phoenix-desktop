@@ -51,9 +51,12 @@ _NAMESPACE = "antivirus"
 _lock = threading.Lock()
 
 # User-level DB seeding directory
-_CLAMAV_DATA_DIR = os.path.join(
-    os.path.expanduser("~/Library/Application Support/Phoenix"), "clamav",
-)
+# Derive from get_config_dir() — the single source of truth for the data
+# dir name (legacy "Resistine" until the migration): a hardcoded name here
+# split the install in two, with freshclam seeding one tree while the
+# postinstall read the other (NO_DB_FILES).
+from utils.settings import get_config_dir as _get_config_dir
+_CLAMAV_DATA_DIR = os.path.join(_get_config_dir(), "clamav")
 _USER_DB_DIR = os.path.join(_CLAMAV_DATA_DIR, "db")
 _LOCK_FILE = os.path.join(_CLAMAV_DATA_DIR, "freshclam.lock")
 

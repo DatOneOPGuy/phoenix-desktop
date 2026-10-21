@@ -40,8 +40,10 @@ _lock = threading.Lock()
 # ---------------------------------------------------------------------------
 # Cache path
 # ---------------------------------------------------------------------------
+from utils.settings import get_config_dir as _get_config_dir
+
 _CACHE_DIR = os.path.join(
-    os.path.expanduser("~/Library/Application Support/Phoenix"), "cache"
+    _get_config_dir(), "cache"
 )
 _CACHED_PKG = os.path.join(_CACHE_DIR, "wazuh-agent.pkg")
 
