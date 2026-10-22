@@ -101,7 +101,8 @@ def validate(raw) -> Optional[dict]:
         "critical": _int(ev.get("critical")), "high": _int(ev.get("high")),
         "cves": [c for c in (ev.get("cves") or [])[:5] if isinstance(c, str) and CVE_RE.fullmatch(c)],
         "fixed_version": fixed if isinstance(fixed, str) and VERSION_RE.fullmatch(fixed) else None,
-        "fix_available": bool(ev.get("fix_available", True)),
+        # None: the scanner didn't say whether a fix exists.
+        "fix_available": ev["fix_available"] if isinstance(ev.get("fix_available"), bool) else None,
         "failed_checks": _int(ev.get("failed_checks")), "checks": _int(ev.get("checks")),
     }
     return {"id": item_id, "kind": kind, "severity": sev, "title": _plain(raw.get("title"), 120),
@@ -290,7 +291,7 @@ def detail_line(item: dict) -> str:
         installed = f"installed {c['version']}"
         if ev["fixed_version"]:
             installed += f", fixed in {ev['fixed_version']}"
-        elif not ev["fix_available"]:
+        elif ev["fix_available"] is False:
             installed += ", no fix released yet"
         bits.append(installed)
         return " · ".join(bits)
