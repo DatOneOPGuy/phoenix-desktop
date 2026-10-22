@@ -129,6 +129,34 @@ class TestPackageProbe:
         assert calls[0][:3] == ["/usr/bin/rpm", "-q", "--qf"] and calls[0][-1] == "openssl"
         assert mit._package_state("openssl", "3.0.7-27.el9", "rpm") == mit.FIXED_HERE
 
+    def test_upgraded_kernel_still_running_needs_a_restart(self, linux, monkeypatch):
+        monkeypatch.setattr(mit.platform, "release", lambda: "7.0.0-34-generic")
+        monkeypatch.setattr(mit, "_read", lambda path: "")
+        pkg = "linux-image-7.0.0-34-generic"
+        linux[1].extend([completed(1, "", "dpkg-query: no packages found matching x"),  # autoremoved
+                         completed(0, "rc |7.0.0-34.34\n")])
+        assert mit._package_state(pkg, "7.0.0-34.34", "deb") == mit.REBOOT
+        assert mit._package_state(pkg, "7.0.0-34.34", "deb") == mit.REBOOT
+        monkeypatch.setattr(mit.platform, "release", lambda: "7.0.0-38-generic")  # rebooted
+        linux[1].append(completed(1, "", "dpkg-query: no packages found matching x"))
+        assert mit._package_state(pkg, "7.0.0-34.34", "deb") == mit.FIXED_HERE
+
+    def test_ubuntu_rebuild_with_the_same_abi(self, linux, monkeypatch):
+        monkeypatch.setattr(mit.platform, "release", lambda: "7.0.0-34-generic")
+        pkg = "linux-image-7.0.0-34-generic"
+        monkeypatch.setattr(mit, "_read", lambda path: "Ubuntu 7.0.0-34.34-generic 7.0.0\n")
+        linux[1].append(completed(0, "ii |7.0.0-34.35\n"))
+        assert mit._package_state(pkg, "7.0.0-34.34", "deb") == mit.REBOOT  # booted 34.34
+        monkeypatch.setattr(mit, "_read", lambda path: "Ubuntu 7.0.0-34.35-generic 7.0.0\n")
+        linux[1].append(completed(0, "ii |7.0.0-34.35\n"))
+        assert mit._package_state(pkg, "7.0.0-34.34", "deb") == mit.FIXED_HERE
+
+    def test_rpm_kernel_still_running(self, linux, monkeypatch):
+        monkeypatch.setattr(mit.platform, "release", lambda: "6.8.5-301.fc40.x86_64")
+        linux[1].extend([completed(0, "0:6.9.1-200.fc40\n"), completed(0, "0:6.9.1-200.fc40\n")])
+        assert mit._package_state("kernel-core", "6.8.5-301.fc40", "rpm") == mit.REBOOT
+        assert mit._package_state("openssl", "6.8.5-301.fc40", "rpm") == mit.FIXED_HERE  # not a kernel
+
     def test_errors_and_timeouts_are_unknown(self, linux, monkeypatch):
         linux[1].append(completed(2, "", "dpkg-query: error"))
         assert mit._package_state("openssl", "1", "deb") == mit.UNKNOWN
@@ -194,6 +222,7 @@ def test_summary_and_detail_lines():
     assert mit.summary([(pkg, mit.OPEN), (agent, mit.FIXED_HERE), (cis, mit.SERVER)]) == (
         "1 to fix · 1 fixed here · 1 to review")
     assert mit.summary([]) == "Nothing to do"
+    assert mit.summary([(pkg, mit.REBOOT), (cis, mit.SERVER)]) == "1 restart needed · 1 to review"
     assert mit.detail_line(pkg) == ("2 critical · 1 high · CVE-2026-0001, CVE-2026-0002 · "
                                     "installed 3.0.13-0ubuntu3.1, fixed in 3.0.13-0ubuntu3.4")
     assert "35 of 103" in mit.detail_line(cis)
