@@ -10,6 +10,7 @@ import os
 import socket
 import subprocess
 import tempfile
+import shutil
 import re
 
 from utils import settings
@@ -227,14 +228,25 @@ def _get_os_info():
         return "arch"
     return None
 
-def get_package_url():
-    """Manifest URL of the Phoenix agent for this machine, or None.
+# Package store platform per package family (amd64 only).
+_PACKAGE_PLATFORMS = {"deb": "linux-amd64", "rpm": "linux-amd64-rpm"}
 
-    Phoenix builds the Linux agent as an amd64 .deb only.
+
+def package_platform():
+    """The package store platform for this machine, or None when none is built.
+
+    Debian/Ubuntu get the .deb (linux-amd64), Fedora/RHEL/openSUSE the .rpm
+    (linux-amd64-rpm).
     """
-    if _get_os_info() != "deb":
+    if phoenix_packages.platform_key() != "linux-amd64":
         return None
-    return phoenix_packages.manifest_url()
+    return _PACKAGE_PLATFORMS.get(_get_os_info())
+
+
+def get_package_url():
+    """Manifest URL of the Phoenix agent for this machine, or None."""
+    plat = package_platform()
+    return phoenix_packages.manifest_url(plat) if plat else None
 
 def installed_agent_dir():
     """Return the install dir of an existing agent, or None.
@@ -312,18 +324,20 @@ def get_agent_connection():
     )
 
 def download_package(progress_callback=None):
-    """Download the signed Phoenix agent .deb (needs a Phoenix sign-in).
+    """Download the signed Phoenix agent .deb or .rpm (needs a Phoenix sign-in).
 
     Returns the verified local path, or None.
     """
-    if not get_package_url():
-        msg = "Phoenix builds the Linux agent for Debian/Ubuntu (amd64) only."
+    plat = package_platform()
+    if not plat:
+        msg = ("Phoenix builds the Linux agent for Debian/Ubuntu and "
+               "Fedora/RHEL/openSUSE (amd64) only.")
         logger.error(msg)
         if progress_callback:
             progress_callback(msg)
         return None
     return phoenix_packages.download_or_none(
-        tempfile.mkdtemp(prefix="phoenix_agent_"), progress_callback)
+        tempfile.mkdtemp(prefix="phoenix_agent_"), progress_callback, plat=plat)
 
 def write_env_file(agent_name, agent_group):
     # Not using env file for Linux, we'll pass via environment to the installer or patch ossec.conf
@@ -519,6 +533,22 @@ def remove_agent(wipe_keys: bool = False):
         logger.error(f"Failed to remove Wazuh agent: {output}")
     return success
 
+def _rpm_install_cmd(deploy_env, pkg_path):
+    """Shell command installing the agent .rpm with this system's package manager.
+
+    The package is verified against the signed manifest before this runs; it
+    carries no GPG signature, hence --nogpgcheck / --allow-unsigned-rpm.
+    """
+    if shutil.which("dnf"):
+        return f"{deploy_env} dnf -y install --nogpgcheck '{pkg_path}'"
+    if shutil.which("zypper"):
+        return (f"{deploy_env} zypper --non-interactive install "
+                f"--allow-unsigned-rpm '{pkg_path}'")
+    if shutil.which("yum"):
+        return f"{deploy_env} yum -y install --nogpgcheck '{pkg_path}'"
+    return f"{deploy_env} rpm -Uvh '{pkg_path}'"
+
+
 def full_install(progress_callback=None):
     pkg_path = download_package(progress_callback)
     if not pkg_path:
@@ -539,7 +569,8 @@ def full_install(progress_callback=None):
     if os_type == "deb":
         install_cmd = f"{deploy_env} dpkg -i '{pkg_path}'"
     elif os_type == "rpm":
-        install_cmd = f"{deploy_env} rpm -ihv '{pkg_path}'"
+        # dnf/zypper pull in the package's dependencies; rpm -U also upgrades.
+        install_cmd = _rpm_install_cmd(deploy_env, pkg_path)
     elif os_type == "arch":
         # No postinst runs when extracting with bsdtar — create the wazuh user/group, extract,
         # fix ownership, then stamp manager + group into ossec.conf manually
