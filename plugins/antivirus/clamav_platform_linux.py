@@ -134,6 +134,19 @@ def _run_privileged(command: list[str], timeout: int = 300) -> tuple[bool, str]:
 
     Returns ``(success, combined_output)``.
     """
+    if os.geteuid() == 0:
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return False, "Command timed out."
+        except Exception as exc:
+            return False, str(exc)
+        if result.returncode == 0:
+            return True, (result.stdout or "").strip()
+        return False, (result.stderr or result.stdout or "").strip() or (
+            f"exited with code {result.returncode}"
+        )
+
     if shutil.which("pkexec"):
         try:
             executable = shutil.which(command[0]) or command[0]

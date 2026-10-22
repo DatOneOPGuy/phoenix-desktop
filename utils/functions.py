@@ -59,6 +59,24 @@ def move_to_applications() -> bool:
         return False
 
 
+def restore_system_library_path() -> None:
+    """Give child processes the system's libraries, not the bundle's.
+
+    The PyInstaller bootloader on Linux points LD_LIBRARY_PATH at the bundle
+    (keeping the user's value in LD_LIBRARY_PATH_ORIG). Every child inherits
+    it, so pkexec, wg-quick or systemctl load the bundle's older GLib and fail
+    ("undefined symbol: g_fdwalk_set_cloexec"). The loader read the variable
+    when this process started, so changing it now only affects children.
+    """
+    if not getattr(sys, "frozen", False) or not sys.platform.startswith("linux"):
+        return
+    orig = os.environ.pop("LD_LIBRARY_PATH_ORIG", None)
+    if orig:
+        os.environ["LD_LIBRARY_PATH"] = orig
+    else:
+        os.environ.pop("LD_LIBRARY_PATH", None)
+
+
 LEGACY_BUNDLE = "/Applications/Resistine.app"
 
 

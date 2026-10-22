@@ -335,10 +335,8 @@ def _inject_linux(conf: str) -> tuple[bool, str]:
         f"{restart_chain}"
     )
 
-    for cmd in (
-        ["pkexec", "bash", "-c", shell_cmd],
-        ["sudo", "bash", "-c", shell_cmd],
-    ):
+    elevate = [[]] if os.geteuid() == 0 else [["pkexec"], ["sudo"]]
+    for cmd in ([*e, "bash", "-c", shell_cmd] for e in elevate):
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=30,

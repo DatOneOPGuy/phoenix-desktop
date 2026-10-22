@@ -46,6 +46,18 @@ def run_privileged_command(command, timeout=120):
     Shows the password dialog if sudo is used.
     Returns (success, output).
     """
+    if os.geteuid() == 0:
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+        except Exception as e:
+            logger.error(f"Error running command as root: {e}")
+            return False, str(e)
+        out = result.stdout.strip()
+        if result.returncode != 0:
+            logger.error(f"Command failed as root (code {result.returncode}): {result.stderr.strip()}")
+            return False, result.stderr.strip() + out
+        return True, out
+
     logger.info(f"Attempting to run with pkexec: {command}")
     try:
         result = subprocess.run(

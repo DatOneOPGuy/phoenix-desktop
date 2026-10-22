@@ -80,6 +80,16 @@ def run_privileged_command(command_args):
     :param command_args: List of command arguments (e.g., ["wg", "show"])
     :return: subprocess.CompletedProcess or None if failed
     """
+    if is_admin():
+        try:
+            return subprocess.run(command_args, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Command failed as root (code {e.returncode}): "
+                         f"{e.stderr.strip() or e.stdout.strip() or 'No output'}")
+        except Exception as e:
+            logger.error(f"Error running command as root: {e}")
+        return None
+
     # Try pkexec first (standard GUI way). When pkexec is available it drives
     # the system polkit prompt, which already handles authentication — so we do
     # NOT pop a second, in-app sudo password dialog on top of it.
