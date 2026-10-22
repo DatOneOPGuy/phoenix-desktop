@@ -180,14 +180,25 @@ def panel_data(st: dict, names: Iterable[str], now: Optional[datetime] = None,
         grade = str(mine.get("grade") or "?")
         when = _computed(mine)
         stale = when is None or (now.replace(tzinfo=None) - when.replace(tzinfo=None)).total_seconds() > STALE_AFTER_S
-        badge = ("warning", "Stale") if stale else (_grade_kind(grade), f"Grade {grade}")
         v, comp, al = mine.get("vulnerabilities") or {}, mine.get("compliance") or {}, mine.get("alerts") or {}
+        scanned = v.get("available", True) is not False
+        if stale:
+            badge = ("warning", "Stale")
+        elif not scanned:  # graded without its vulnerabilities: not a clean bill
+            badge = ("warning", f"Grade {grade}, partial")
+        else:
+            badge = (_grade_kind(grade), f"Grade {grade}")
         rows["Machine"] = str(mine.get("hostname") or "—")
         health = str(mine.get("health") or "").replace("_", " ")
         rows["Score"] = f"{grade} · {mine.get('score', '—')}/100" + (f", {health}" if health else "")
         if score_trend:
             rows["Trend"] = score_trend["text"]
-        rows["Vulnerabilities"] = f"{_n(v.get('critical'))} critical · {_n(v.get('high'))} high"
+        if scanned:
+            rows["Vulnerabilities"] = f"{_n(v.get('critical'))} critical · {_n(v.get('high'))} high"
+        elif v.get("reason") == "not_covered":
+            rows["Vulnerabilities"] = "Not scanned: the SIEM has no vulnerability feed for this OS"
+        else:
+            rows["Vulnerabilities"] = "Unavailable: the last scan failed"
         pct = comp.get("score_pct")
         rows["Compliance"] = (f"{pct}%" if pct is not None else "—") + (
             f" ({_n(comp.get('failed_checks'))} failed checks)" if comp.get("failed_checks") else "")

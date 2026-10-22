@@ -73,6 +73,15 @@ class TestValidate:
         assert out["title"] == "Update openssl"
         assert out["evidence"]["critical"] == 0 and out["evidence"]["cves"] == ["CVE-2026-1"]
         assert out["evidence"]["fixed_version"] is None
+        assert out["evidence"]["fix_available"] is None  # not said: not "a fix exists"
+
+    @pytest.mark.parametrize("available,text", [
+        (True, "installed 1.0"), (None, "installed 1.0"), (False, "installed 1.0, no fix released yet")])
+    def test_fix_available_is_shown_only_when_known(self, available, text):
+        item = dict(PKG_ITEM, evidence={"fixed_version": None, "fix_available": available})
+        out = mit.items_of(card(dict(item, check=dict(PKG_ITEM["check"], version="1.0"))))[0]
+        assert out["evidence"]["fix_available"] is available
+        assert mit.detail_line(out).endswith(text)
 
     def test_not_a_list(self):
         assert mit.items_of({"mitigations": "nope"}) == [] and mit.items_of(None) == []
