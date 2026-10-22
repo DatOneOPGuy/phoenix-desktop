@@ -240,14 +240,18 @@ def add_point(history, score: int, today: date) -> list:
     return [p for p in sorted(pts) if p[0] >= cutoff]
 
 
-def record_score(card, today: Optional[date] = None) -> list:
-    """Store this machine's score in today's point. Returns the history."""
+def record_score(card) -> list:
+    """Store this machine's score under the day the server computed it.
+    Returns the history.
+
+    Not the day the app ran: a cached or stale card would otherwise add a
+    point every day with the same score, a flat line nobody measured."""
     history = _clean_history(settings.get(_NS, _HISTORY_KEY))
     score = _score(card)
-    if score is None:
+    when = _computed(card) if isinstance(card, dict) else None
+    if score is None or when is None:
         return history
-    today = today or date.today()
-    new = add_point(history, score, today)
+    new = add_point(history, score, when.date())
     if new != history:
         settings.set(_NS, _HISTORY_KEY, new)
     return new
