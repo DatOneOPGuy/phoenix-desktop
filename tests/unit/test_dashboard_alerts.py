@@ -61,6 +61,19 @@ TRIAGE_PROSE = """*SIEM triage* — 25 alert(s)
 The /bin/sh alert might be of medium severity, while the rest might be of low severity.
 """
 
+TRIAGE_NUMBERED = """*SIEM triage* — 25 alert(s)
+[Affected asset(s)] AnubisAI agent 007 | at 2026-10-16T10:26:59.884Z | source: wazuh.fim
+
+### Verdict
+
+**Finding 1:**
+- **Severity:** Low
+- **Description:** Multiple files were modified on AnubisAI. They are config files.
+
+**Finding 2:**
+- **Indicators:** none
+"""
+
 HUNT = """🔍 *Solving possible issue*
 📍 *Affected asset(s):*
 • AnubisAI (id 007)
@@ -92,10 +105,20 @@ class TestSiemBotMessages:
         assert i["title"] == "25 alerts on AnubisAI — File Modifications"
         assert (i["host"], i["agent"], i["source"]) == ("AnubisAI", "007", "wazuh.fim")
 
-    def test_triage_prose_uses_stated_severities_only(self):
-        i = ra.parse(TRIAGE_PROSE)
-        assert i["severity"] == "medium" and i["findings"] == []
+    def test_triage_prose_is_not_a_severity(self):
+        i = ra.parse(TRIAGE_PROSE)  # "might be of medium severity": no verdict field
+        assert i["severity"] == "unknown" and i["findings"] == []
         assert i["title"] == "25 alerts on AnubisAI"
+
+    def test_prose_does_not_override_the_verdict(self):
+        i = ra.parse(TRIAGE_NUMBERED + "\nThe most urgent finding is of critical severity.\n")
+        assert i["severity"] == "low"
+
+    def test_numbered_findings_are_named_by_their_description(self):
+        i = ra.parse(TRIAGE_NUMBERED)
+        assert i["findings"] == [{"severity": "low", "name": "Multiple files were modified on AnubisAI"},
+                                 {"severity": "unknown", "name": "Finding 2"}]
+        assert i["title"] == "25 alerts on AnubisAI — Multiple files were modified on AnubisAI"
 
     def test_hunt_takes_the_rule_level_not_prose(self):
         i = ra.parse(HUNT)  # "Critical system files" is not a severity

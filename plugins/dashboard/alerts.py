@@ -57,10 +57,16 @@ _ASSET_BULLET = re.compile(r"^\s*•\s*(.+?)\s*\(id\s*([^)]+)\)", re.IGNORECASE)
 _FIELD = re.compile(r"^\*(What|When|Source|Assessment):\*\s*(.+)$", re.IGNORECASE)
 _RULE_LEVEL = re.compile(r"rule\.level\s+(\d+|critical|high|medium|low|informational)", re.IGNORECASE)
 _SEVS = "critical|high|medium|low"
-# "**Severity:** High", "Severity: Medium", "(High Severity)", "of medium severity"
-_SEV_FIELD = re.compile(rf"severity\W{{0,6}}({_SEVS})\b|\b({_SEVS})\s+severity\b", re.IGNORECASE)
-_FINDING = re.compile(r"^\s*\d+\.\s+\*\*(?:Finding:\s*)?(.+?)\*\*", re.IGNORECASE)
-_SEV_SUFFIX = re.compile(rf"\s*\((?:{_SEVS})\s+severity\)\s*$", re.IGNORECASE)
+# Only the verdict's fields: a "- **Severity:** High" line, or a finding
+# header's "(High Severity)". Prose like "might be of medium severity" is
+# the model thinking aloud and changes from one run to the next.
+_SEV_LINE = re.compile(rf"^[\s\-•*]*severity[\s*]*:[\s*]*({_SEVS})\b", re.IGNORECASE)
+# "1. **Name**", "1. **Finding: Name**", "**Finding:** Name", "**Finding 2:**"
+_FINDING = re.compile(r"^\s*(?:\d+\.\s+\*\*(?:Finding:\s*)?(.+?)\*\*"
+                      r"|\*\*(Finding(?:\s+\d+)?):\*\*\s*(.*))", re.IGNORECASE)
+_GENERIC_FINDING = re.compile(r"^Finding(?:\s+\d+)?$", re.IGNORECASE)
+_DESCRIPTION = re.compile(r"^[\s\-•*]*description[\s*]*:[\s*]*(.+)$", re.IGNORECASE)
+_SEV_SUFFIX = re.compile(rf"\s*\(({_SEVS})\s+severity\)\s*$", re.IGNORECASE)
 
 
 def _level_severity(level: str) -> str:
@@ -129,18 +135,32 @@ def parse(body: str) -> dict:
     m_triage, m_result = _TRIAGE.match(_clean(first)), _RESULT.match(_clean(first))
     if m_triage:
         out["kind"], out["count"] = "triage", int(m_triage.group(1))
+        loose = []  # severity lines before any finding header
         for ln in lines:
             m = _FINDING.match(ln)
             if m:
-                out["findings"].append({"severity": "info", "name": _SEV_SUFFIX.sub("", _clean(m.group(1)))})
-            for m in _SEV_FIELD.finditer(ln):
-                sev = (m.group(1) or m.group(2)).lower()
-                if out["findings"] and out["findings"][-1]["severity"] == "info":
-                    out["findings"][-1]["severity"] = sev
+                name = _clean(m.group(1) or m.group(3) or m.group(2))
+                suffix = _SEV_SUFFIX.search(name)
+                out["findings"].append({"severity": suffix.group(1).lower() if suffix else None,
+                                        "name": _SEV_SUFFIX.sub("", name)})
+                continue
+            m = _DESCRIPTION.match(ln)
+            if m and out["findings"] and _GENERIC_FINDING.match(out["findings"][-1]["name"]):
+                # "**Finding 1:**" names nothing; its description does.
+                desc = _clean(m.group(1)).split(". ")[0].rstrip(".")
+                out["findings"][-1]["name"] = desc[:80] + ("…" if len(desc) > 80 else "")
+                continue
+            m = _SEV_LINE.match(_printable(ln))
+            if m:
+                if out["findings"] and out["findings"][-1]["severity"] is None:
+                    out["findings"][-1]["severity"] = m.group(1).lower()
                 elif not out["findings"]:
-                    out.setdefault("_loose", []).append(sev)
-        loose = out.pop("_loose", [])
-        out["severity"] = _worst([f["severity"] for f in out["findings"]] + loose)
+                    loose.append(m.group(1).lower())
+        # The worst stated severity; none stated at all: unknown.
+        stated = [f["severity"] for f in out["findings"] if f["severity"]] + loose
+        out["severity"] = _worst(stated) if stated else "unknown"
+        for f in out["findings"]:
+            f["severity"] = f["severity"] or "unknown"
         top = next((f["name"] for f in out["findings"] if f["severity"] == out["severity"]), "")
         n = out["count"]
         out["title"] = f"{n} alert{'s' if n != 1 else ''}{on}" + (f" — {top}" if top else "")
