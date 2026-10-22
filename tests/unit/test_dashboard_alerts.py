@@ -161,7 +161,7 @@ class TestPanel:
         d = ra.panel_data(items, 2, NOW)
         assert d["badge"] == ("error", "2 new")  # the two newest include a high
         assert list(d["rows"].values()) == ["🔴 ssh brute force", "🟠 odd login", "🟡 old low",
-                                            "1 high · 1 medium · 1 low"]
+                                            "3 incidents: 1 high · 1 medium · 1 low"]
         assert list(d["rows"])[0] == "3 min ago" and list(d["rows"])[-1] == "Last 7 days"
 
     def test_no_unread(self):
@@ -171,7 +171,7 @@ class TestPanel:
         items = [alert(f"⚪ n{i}", i, str(i)) for i in range(7)]
         d = ra.panel_data(items, 0, NOW)
         assert len(d["rows"]) == ra.SHOWN + 2 and d["rows"]["More"] == "3 older alerts"
-        assert d["rows"]["Last 7 days"] == "7 info"
+        assert d["rows"]["Last 7 days"] == "7 incidents: 7 info"
 
     def test_same_minute_keeps_both(self):
         d = ra.panel_data([alert("⚪ a", 1, "a"), alert("⚪ b", 1, "b")], 0, NOW)
@@ -193,7 +193,7 @@ class TestPanel:
         d = ra.panel_data([alert(UNDECRYPTABLE, 2, "$u"), alert("🟡 old low", 9, "l")], 1, NOW)
         assert d["badge"] == ("warning", "1 new")  # not knowing never reads calmer than low
         assert d["rows"]["2 min ago"].startswith("❔ ")
-        assert d["rows"]["Last 7 days"] == "1 unknown · 1 low"
+        assert d["rows"]["Last 7 days"] == "2 incidents: 1 unknown · 1 low"
         assert ra.notification(alert(UNDECRYPTABLE, 0, "$u"), NOW - 60) is None
 
 
@@ -255,8 +255,31 @@ class TestActivity:
     def test_breakdown(self):
         items = [alert("🔴 a", 1, "a"), alert("🔴 b", 2, "b"), alert(HUNT, 3, "c"),
                  {"event_id": "e", "body": "🚨 too old", "ts": NOW - 30 * DAY}]
-        assert ra.breakdown(items, NOW) == "2 high · 1 medium"
+        assert ra.breakdown(items, NOW) == "3 incidents: 2 high · 1 medium"
         assert ra.breakdown([], NOW) == "None"
+
+    def test_event_time(self):
+        utc = ra.event_time("2026-10-16T10:26:59Z")
+        assert ra.event_time("2026-10-16 12:26:59 CEST") == utc
+        assert ra.event_time("2026-10-16T10:26:59.881Z → 2026-10-16T10:27:00Z") == pytest.approx(utc + 0.881)
+        for bad in ("", "yesterday", "2026-10-16 12:26:59", "2026-10-16 12:26:59 XYZ"):
+            assert ra.event_time(bad) is None
+
+    def test_one_incident_is_counted_once(self):
+        result = RESULT_FP.replace("*What:*", "*When:* 2026-10-16 12:26:59 CEST\n*What:*")
+        hunt = HUNT  # 2026-10-16 12:26:59 CEST on AnubisAI (id 007)
+        items = [alert(TRIAGE, 30, "t1"), alert(TRIAGE, 25, "t2"),  # re-triaged window
+                 alert(hunt, 20, "h"), alert(result, 19, "r"),
+                 alert(hunt.replace("12:26:59", "13:40:00"), 10, "later"),  # same machine, later
+                 alert("🔴 no machine, no time", 5, "x")]
+        inc = ra.incidents(items)
+        assert [i["count"] for i in inc] == [4, 1, 1]
+        assert inc[0]["severity"] == "high" and inc[0]["ts"] == items[0]["ts"]
+        assert ra.breakdown(items, NOW) == "3 incidents: 2 high · 1 medium"
+
+    def test_other_machines_are_other_incidents(self):
+        other = TRIAGE.replace("AnubisAI agent 007", "francispc agent 004")
+        assert len(ra.incidents([alert(TRIAGE, 3, "a"), alert(other, 2, "b")])) == 2
 
     def test_panel_has_strip(self):
         d = ra.panel_data([alert("🔴 a", 1, "a")], 1, NOW)
@@ -399,7 +422,7 @@ def test_panels_paint_strip_and_sparkline(qapp, isolated_settings, monkeypatch, 
     siem_alerts.publish("!r", "$t", TRIAGE)
     panel = plugin._panels["alerts"]
     strip = panel.findChild(_DayStrip)
-    assert strip is not None and "1 alert" in strip.toolTip()
+    assert strip is not None and "1 incident" in strip.toolTip()
     strip.resize(300, strip.height())
     strip.grab()  # paints without errors
     plugin._panels["posture"].set_data({"badge": ("ok", "Grade A"), "rows": {"Trend": "▲ 6 since last week"},
