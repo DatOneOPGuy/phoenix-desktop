@@ -375,7 +375,7 @@ def _sev_color(sev) -> QColor:
 
 
 class _DayStrip(QWidget):
-    """Alerts per day, oldest left: one bar per day, its height the count
+    """Incidents per day, oldest left: one bar per day, its height the count
     (square-root scale, so one busy day doesn't flatten the rest) and its
     colour the day's worst severity. Weekday initials underneath."""
 
@@ -387,7 +387,7 @@ class _DayStrip(QWidget):
         self.setFixedHeight(self.BAR_H + 18)
         self.setMinimumWidth(140)
         busiest = max((d["count"] for d in self._days), default=0)
-        parts = [f"{d['day']:%a %d %b}: {d['count']} alert{'s' if d['count'] != 1 else ''}"
+        parts = [f"{d['day']:%a %d %b}: {d['count']} incident{'s' if d['count'] != 1 else ''}"
                  + (f", worst {d['worst']}" if d["worst"] else "") for d in self._days]
         self.setToolTip("\n".join(parts))
         self._max = busiest

@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from plugins.chat.siem_alerts import UNDECRYPTABLE
@@ -259,36 +259,97 @@ DAYS = 7
 SEV_ORDER = ("critical", "high", "medium", "unknown", "low", "info")
 
 
-def activity(alerts: list, now: Optional[float] = None, days: int = DAYS) -> list:
-    """One entry per local day, oldest first, ending today:
-    {"day": date, "count": n, "worst": severity or None}."""
-    today = datetime.fromtimestamp(now or time.time()).date()
-    first = today - timedelta(days=days - 1)
-    out = [{"day": first + timedelta(days=i), "count": 0, "worst": None} for i in range(days)]
+INCIDENT_GAP_S = 300  # events on one machine this close together are one incident
+# Zone names siemgent prints in *When:* ("2026-10-16 12:26:59 CEST").
+_TZ_HOURS = {"UTC": 0, "GMT": 0, "WET": 0, "WEST": 1, "BST": 1, "CET": 1, "CEST": 2,
+             "EET": 2, "EEST": 3, "MSK": 3, "EST": -5, "EDT": -4, "CST": -6, "CDT": -5,
+             "MST": -7, "MDT": -6, "PST": -8, "PDT": -7}
+_WHEN_ZONE = re.compile(r"^(\d{4}-\d\d-\d\d[ T]\d\d:\d\d(?::\d\d)?)\s+([A-Z]{2,5})$")
+
+
+def event_time(when: str) -> Optional[float]:
+    """When the alerted event happened (epoch seconds), from a parsed
+    "when": an ISO time or window start, or "<local time> <zone>"."""
+    when = (when or "").split("→")[0].strip()
+    try:
+        t = datetime.fromisoformat(when.replace("Z", "+00:00"))
+        return t.timestamp() if t.tzinfo else None
+    except ValueError:
+        pass
+    m = _WHEN_ZONE.match(when)
+    if m and m.group(2) in _TZ_HOURS:
+        try:
+            t = datetime.fromisoformat(m.group(1)).replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+        return t.timestamp() - _TZ_HOURS[m.group(2)] * 3600
+    return None
+
+
+def incidents(alerts: list) -> list:
+    """The alerts grouped by what they are about, oldest first.
+
+    siem-bot sends several messages per incident: a triage (sometimes
+    re-sent for the same window), then per finding an "Investigating" and
+    a hunt result. Messages about one machine whose events are at most
+    INCIDENT_GAP_S apart are one incident; a message with no machine or
+    event time is one on its own. Each: {"ts": first message, "severity":
+    the worst of its messages, "count": messages}."""
+    by_host: dict = {}
+    out = []
     for a in alerts or []:
         if not isinstance(a, dict) or not isinstance(a.get("ts"), (int, float)):
             continue
-        day = datetime.fromtimestamp(a["ts"]).date()
+        info = parse(a.get("body", ""))
+        host = (info["agent"] or info["host"]).lower()
+        et = event_time(info["when"])
+        if not host or et is None:
+            out.append({"ts": a["ts"], "severity": info["severity"], "count": 1})
+            continue
+        by_host.setdefault(host, []).append((et, a["ts"], info["severity"]))
+    for events in by_host.values():
+        events.sort()
+        last = None
+        for et, ts, sev in events:
+            if last is None or et - last > INCIDENT_GAP_S:
+                cur = {"ts": ts, "severity": sev, "count": 0}
+                out.append(cur)
+            cur["ts"] = min(cur["ts"], ts)
+            cur["severity"] = _worst((cur["severity"], sev))
+            cur["count"] += 1
+            last = et
+    return sorted(out, key=lambda i: i["ts"])
+
+
+def activity(alerts: list, now: Optional[float] = None, days: int = DAYS) -> list:
+    """Incidents per local day (by first message), oldest first, ending
+    today: {"day": date, "count": n, "worst": severity or None}."""
+    today = datetime.fromtimestamp(now or time.time()).date()
+    first = today - timedelta(days=days - 1)
+    out = [{"day": first + timedelta(days=i), "count": 0, "worst": None} for i in range(days)]
+    for inc in incidents(alerts):
+        day = datetime.fromtimestamp(inc["ts"]).date()
         if not first <= day <= today:
             continue
         slot = out[(day - first).days]
-        sev = severity(a.get("body", ""))
         slot["count"] += 1
-        if slot["worst"] is None or _SEV_RANK[sev] > _SEV_RANK[slot["worst"]]:
-            slot["worst"] = sev
+        if slot["worst"] is None or _SEV_RANK[inc["severity"]] > _SEV_RANK[slot["worst"]]:
+            slot["worst"] = inc["severity"]
     return out
 
 
 def breakdown(alerts: list, now: Optional[float] = None, days: int = DAYS) -> str:
-    """"2 high · 5 medium · 18 low" for the last *days* days, or "None"."""
+    """"7 incidents: 2 high · 5 medium" for the last *days* days, or "None"."""
     counts = dict.fromkeys(SEV_ORDER, 0)
     cutoff = datetime.fromtimestamp(now or time.time()).date() - timedelta(days=days - 1)
-    for a in alerts or []:
-        if (isinstance(a, dict) and isinstance(a.get("ts"), (int, float))
-                and datetime.fromtimestamp(a["ts"]).date() >= cutoff):
-            counts[severity(a.get("body", ""))] += 1
-    parts = [f"{n} {sev}" for sev, n in counts.items() if n]
-    return " · ".join(parts) or "None"
+    for inc in incidents(alerts):
+        if datetime.fromtimestamp(inc["ts"]).date() >= cutoff:
+            counts[inc["severity"]] += 1
+    total = sum(counts.values())
+    if not total:
+        return "None"
+    parts = " · ".join(f"{n} {sev}" for sev, n in counts.items() if n)
+    return f"{total} incident{'s' if total != 1 else ''}: {parts}"
 
 
 NOTIFY_SEVERITIES = ("critical", "high")
