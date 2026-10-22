@@ -129,11 +129,46 @@ class TurnAssembler:
 # ---------------------------------------------------------------------------
 
 def _store_key() -> str:
+    """The E2EE store's pickle key (a secret under the keyring's master key).
+
+    A key that is stored but won't decrypt is NOT replaced while the master
+    key itself may be the problem (keyring locked, or answering with another
+    key): a new key would lock the store for good. Only when another secret
+    still decrypts is it really lost; then a new one is made, and _main
+    moves the store it can no longer open aside."""
     key = settings.get_secret(_NS, "matrix_store_key")
-    if not key:
-        key = secrets.token_urlsafe(32)
-        settings.set_secret(_NS, "matrix_store_key", key)
+    if key:
+        return key
+    if settings.get(_NS, "matrix_store_key") and not _master_key_works():
+        raise MatrixTransportError(
+            "Couldn't read the chat encryption key from the system keyring. "
+            "Unlock the keyring (or sign in to your desktop session again) and retry.")
+    key = secrets.token_urlsafe(32)
+    settings.set_secret(_NS, "matrix_store_key", key)
     return key
+
+
+def _master_key_works() -> bool:
+    """True when the keyring's master key decrypts the sign-in tokens."""
+    return any(settings.get_secret("auth", k) for k in ("refresh_token", "access_token")
+               if settings.get("auth", k))
+
+
+def _is_store_key_mismatch(e: Exception) -> bool:
+    """The store was written under another pickle key (vodozemac/libolm)."""
+    return "PickleException" in type(e).__name__ or "pickle couldn't be decrypted" in str(e).lower()
+
+
+def _set_store_aside(store: str, user_id: str, device_id: str) -> str:
+    """Move this device's store files into ``store/unreadable-<time>/``
+    (kept, not deleted: they open again if the old key turns up)."""
+    dest = os.path.join(store, time.strftime("unreadable-%Y%m%d-%H%M%S"))
+    os.makedirs(dest, mode=0o700, exist_ok=True)
+    prefix = _store_prefix(user_id, device_id)
+    for name in os.listdir(store):
+        if name.startswith(prefix):
+            os.replace(os.path.join(store, name), os.path.join(dest, name))
+    return dest
 
 
 def _store_prefix(user_id: str, device_id: str) -> str:
@@ -294,21 +329,37 @@ class MatrixService:
 
         store = os.path.join(settings.get_config_dir(), "matrix-store")
         os.makedirs(store, mode=0o700, exist_ok=True)
-        client = AsyncClient(
-            self.homeserver, self.user_id, device_id=self.device_id, store_path=store,
-            config=AsyncClientConfig(
-                encryption_enabled=True,
-                store=_store_class(),
-                # Initial sync every start: it is what surfaces the saved DM
-                # (room state is not persisted). Turns are request/response,
-                # so nothing is lost by not resuming an old sync position.
-                store_sync_tokens=False,
-                pickle_key=_store_key(), max_timeouts=6, backoff_factor=0.5),
-        )
+
+        def new_client():
+            return AsyncClient(
+                self.homeserver, self.user_id, device_id=self.device_id, store_path=store,
+                config=AsyncClientConfig(
+                    encryption_enabled=True,
+                    store=_store_class(),
+                    # Initial sync every start: it is what surfaces the saved DM
+                    # (room state is not persisted). Turns are request/response,
+                    # so nothing is lost by not resuming an old sync position.
+                    store_sync_tokens=False,
+                    pickle_key=_store_key(), max_timeouts=6, backoff_factor=0.5),
+            )
+
+        client = new_client()
+        try:
+            client.restore_login(self.user_id, self.device_id, token)
+        except Exception as e:  # noqa: BLE001 — only a lost store key is handled
+            if not _is_store_key_mismatch(e):
+                raise
+            # The store's key is gone (see _store_key): it can never open
+            # again here. Start a new one; this device gets new E2EE keys,
+            # which _ensure_device_keys_published uploads.
+            dest = _set_store_aside(store, self.user_id, self.device_id)
+            logger.warning(f"[CHAT-MATRIX] E2EE store unreadable with the current key; moved to {dest}, "
+                           "starting a new one")
+            client = new_client()
+            client.restore_login(self.user_id, self.device_id, token)
         # Cloudflare's Browser Integrity Check rejects the default aiohttp UA.
         client.client_session = aiohttp.ClientSession(headers={"User-Agent": oidc._user_agent()})
         self._client = client
-        client.restore_login(self.user_id, self.device_id, token)
 
         who = await client.whoami()
         if not isinstance(who, WhoamiResponse):

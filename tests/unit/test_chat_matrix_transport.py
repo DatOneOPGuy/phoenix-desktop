@@ -1,5 +1,6 @@
 """Matrix chat transport: turn assembly, turn collection, controller + plugin wiring."""
 
+import os
 import queue
 import threading
 from unittest.mock import MagicMock
@@ -208,6 +209,47 @@ class TestStoreFileNames:
         names = self.open_store(tmp_path, monkeypatch, "linux")
         assert names == ["@me:phoenix.exposed_PHX_DEV.db",
                          "@me:phoenix.exposed_PHX_DEV.ignored_devices"]
+
+
+@pytest.mark.unit
+class TestStoreKey:
+    """A store key that won't decrypt must not be replaced while the keyring
+    itself may be at fault: a new key locks the E2EE store for good."""
+
+    def test_made_once_then_reused(self, isolated_settings):
+        key = mt._store_key()
+        assert key and mt._store_key() == key
+
+    def test_locked_keyring_keeps_the_stored_key(self, isolated_settings, monkeypatch):
+        isolated_settings.set_secret("auth", "refresh_token", "rt")
+        isolated_settings.set_secret("chat", "matrix_store_key", "the-real-key")
+        stored = isolated_settings.get("chat", "matrix_store_key")
+        monkeypatch.setattr(isolated_settings, "get_secret", lambda ns, k: None)  # nothing decrypts
+        with pytest.raises(MatrixTransportError, match="keyring"):
+            mt._store_key()
+        assert isolated_settings.get("chat", "matrix_store_key") == stored  # untouched
+
+    def test_lost_key_is_replaced_when_the_master_key_works(self, isolated_settings):
+        isolated_settings.set_secret("auth", "refresh_token", "rt")
+        isolated_settings.set("chat", "matrix_store_key", "ENC:written-under-another-master-key")
+        key = mt._store_key()
+        assert key and isolated_settings.get_secret("chat", "matrix_store_key") == key
+
+    def test_store_key_mismatch_is_recognised(self):
+        class LibolmPickleException(Exception):
+            pass
+        msg = "The pickle couldn't be decrypted: The MAC of the ciphertext didn't pass validation"
+        assert mt._is_store_key_mismatch(LibolmPickleException(msg))
+        assert mt._is_store_key_mismatch(RuntimeError(msg))
+        assert not mt._is_store_key_mismatch(RuntimeError("connection refused"))
+
+    def test_unreadable_store_is_moved_aside_not_deleted(self, tmp_path):
+        prefix = mt._store_prefix("@me:phoenix.exposed", "DEV")
+        for name in (f"{prefix}.db", f"{prefix}.trusted_devices", "@other:x_DEV2.db"):
+            (tmp_path / name).write_text("x")
+        dest = mt._set_store_aside(str(tmp_path), "@me:phoenix.exposed", "DEV")
+        assert sorted(p.name for p in tmp_path.iterdir() if p.is_file()) == ["@other:x_DEV2.db"]
+        assert sorted(os.listdir(dest)) == [f"{prefix}.db", f"{prefix}.trusted_devices"]
 
 
 @pytest.mark.unit
