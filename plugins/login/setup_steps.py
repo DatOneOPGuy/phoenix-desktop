@@ -815,12 +815,12 @@ _WZ_REASON_MSG = {
         "Try again to enroll under a new identifier."
     ),
     "manager_unreachable": (
-        "Couldn't reach the monitoring server. Make sure the VPN is connected, "
-        "then try again."
+        "Couldn't reach the monitoring server. Check your internet connection "
+        "and try again."
     ),
     "enroll_failed": (
-        "Enrollment with the monitoring server failed. Make sure the VPN is "
-        "connected, then try again."
+        "Enrollment with the monitoring server failed. Check your internet "
+        "connection and try again."
     ),
 }
 
@@ -830,7 +830,7 @@ def _wazuh_reason_message(reason) -> str:
     if reason and reason.startswith("enroll_rc_"):
         rc = reason[len("enroll_rc_"):]
         return (f"Enrollment with the monitoring server failed (code {rc}). "
-                "Make sure the VPN is connected, then try again.")
+                "Check your internet connection and try again.")
     if reason in _WZ_REASON_MSG:
         return _WZ_REASON_MSG[reason]
     if reason:
@@ -1004,7 +1004,7 @@ class _EndpointStepMac(SetupStep):
                 if not _wazuh_reenroll(on_status):
                     self._failed = (
                         "Couldn't enroll the endpoint agent with the monitoring "
-                        "server. Make sure the VPN is connected, then try again.")
+                        "server. Check your internet connection and try again.")
                     return
             else:
                 if not _wazuh_activate(on_status, self.cancelled):
@@ -1083,8 +1083,8 @@ class _EndpointStepDirect(SetupStep):
                 if not _wazuh_reenroll(_status):
                     self._failed = (
                         "The endpoint agent installed but couldn't reach the "
-                        "monitoring server to finish enrolling. Make sure the VPN "
-                        "is connected, then try again."
+                        "monitoring server to finish enrolling. Check your internet "
+                        "connection and try again."
                     )
                     return
             elif _wazuh_connection() == "disconnected":

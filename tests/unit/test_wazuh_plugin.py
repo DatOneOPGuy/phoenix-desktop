@@ -60,7 +60,6 @@ def wazuh_plugin():
          patch("plugins.wazuh.main.needs_reenrollment", return_value=False), \
          patch("plugins.wazuh.main.get_agent_name", return_value="test-host"), \
          patch("plugins.wazuh.main.get_agent_group", return_value="test.group"), \
-         patch("plugins.wazuh.main.is_vpn_connected", return_value=True), \
          patch("plugins.wazuh.main.start_agent", return_value=True), \
          patch("plugins.wazuh.main.stop_agent", return_value=True), \
          patch("plugins.wazuh.main.get_agent_connection", return_value="connected"), \
@@ -162,37 +161,29 @@ class TestToggleAgent:
             thread.assert_not_called()
 
     @pytest.mark.parametrize("platform_name", ["Linux", "Windows"])
-    def test_start_requires_vpn(self, wazuh_plugin, qapp, platform_name):
-        """On Linux/Windows, starting the agent without VPN shows an error and
-        flips the toggle back off without re-firing the toggled handler."""
+    def test_start_needs_no_vpn(self, wazuh_plugin, qapp, platform_name):
+        """On Linux/Windows the agent starts without the VPN: it reaches the
+        manager over the internet. The toggle is disabled while busy."""
         from gui.toggle import ToggleSwitch
 
         toggle = ToggleSwitch()
-        toggle.setChecked(True)  # user just flipped it on
-        handler = MagicMock()
-        toggle.toggled.connect(handler)
         wazuh_plugin._agent_toggle = toggle
         with patch("plugins.wazuh.main._PLATFORM", platform_name), \
              patch("plugins.wazuh.main.get_agent_status", return_value="Stopped"), \
-             patch("plugins.wazuh.main.is_vpn_connected", return_value=False), \
-             patch("plugins.wazuh.main.start_agent") as start:
+             patch("plugins.wazuh.main.threading.Thread") as thread:
             wazuh_plugin._toggle_agent(True)
-        wazuh_plugin.app.show_notification.assert_called_once()
-        assert "VPN" in wazuh_plugin.app.show_notification.call_args[0][0]
-        assert toggle.isChecked() is False
-        handler.assert_not_called()
-        assert toggle.isEnabled()
-        start.assert_not_called()
+        wazuh_plugin.app.show_notification.assert_not_called()
+        assert toggle.isEnabled() is False
+        thread.return_value.start.assert_called_once()
 
-    def test_darwin_start_skips_vpn_gate(self, wazuh_plugin, qapp):
-        """macOS has no VPN gate: start proceeds (toggle disabled while busy)."""
+    def test_darwin_start(self, wazuh_plugin, qapp):
+        """macOS: start proceeds (toggle disabled while busy)."""
         from gui.toggle import ToggleSwitch
 
         toggle = ToggleSwitch()
         wazuh_plugin._agent_toggle = toggle
         with patch("plugins.wazuh.main._PLATFORM", "Darwin"), \
              patch("plugins.wazuh.main.get_agent_status", return_value="Stopped"), \
-             patch("plugins.wazuh.main.is_vpn_connected", return_value=False), \
              patch("plugins.wazuh.main.threading.Thread") as thread:
             wazuh_plugin._toggle_agent(True)
         wazuh_plugin.app.show_notification.assert_not_called()

@@ -37,15 +37,6 @@ from utils.logger import logger
 _PLATFORM = platform.system()
 _PLUGIN_DIR = os.path.dirname(os.path.realpath(__file__))
 
-# VPN gate (install on non-macOS requires an active VPN). Guarded so the
-# plugin imports even when the VPN plugin is unavailable.
-try:
-    from plugins.vpn.main import is_vpn_connected
-except Exception:  # pragma: no cover - defensive
-    def is_vpn_connected():
-        return True
-
-
 # Platform-conditional backend import (current platform only, guarded so this
 # module imports on any OS).
 _platform_supported = False
@@ -332,19 +323,16 @@ class Plugin(BasePlugin):
         return self._build_install_section_direct(page)
 
     def _build_install_section_direct(self, page: Page) -> None:
-        """Install screen for Windows/Linux — requires VPN, one click."""
+        """Install screen for Windows/Linux — one click, no VPN needed."""
         self._header.set_status("warning", "Not installed")
         self._header.set_subtitle(
             "The endpoint agent collects security telemetry from this "
             "machine and reports to the Phoenix SIEM dashboard.")
 
-        vpn_ok = _safe(is_vpn_connected, True)
         self._install_btn = self._action(
             page, "download", "Install agent",
-            "Download and install the agent (needs admin rights)"
-            if vpn_ok else "Connect the VPN to install the agent",
+            "Download and install the agent (needs admin rights)",
             self._start_installation)
-        self._install_btn.setEnabled(bool(vpn_ok))
         self._add_progress_label(page)
         # Indeterminate progress bar, hidden until install starts — the direct
         # install runs several download/MSI/elevation phases with only the text
@@ -440,17 +428,17 @@ class Plugin(BasePlugin):
                     "Retry to enroll under a new identifier."
                 ),
                 "manager_unreachable": (
-                    "Couldn't reach the SIEM manager. Connect the VPN and retry."
+                    "Couldn't reach the SIEM manager. Check your internet connection and retry."
                 ),
                 "enroll_failed": (
                     "Enrollment with the SIEM manager failed. "
-                    "Connect the VPN and retry."
+                    "Check your internet connection and retry."
                 ),
             }
             if reason.startswith("enroll_rc_"):
                 msg = (
                     "Enrollment with the SIEM manager failed. "
-                    "Connect the VPN and retry."
+                    "Check your internet connection and retry."
                 )
             else:
                 msg = _REASON_MSG.get(reason, f"Installation failed ({reason}).")
@@ -625,11 +613,6 @@ class Plugin(BasePlugin):
     def _start_installation_direct(self):
         """Windows/Linux: run full_install() in a background daemon thread."""
         if self._installing:
-            return
-        # Re-check the VPN gate exactly as the original refuses without it.
-        if not _safe(is_vpn_connected, True):
-            self.app.show_notification(
-                "Connect VPN to install the SIEM agent", type="error")
             return
         self._installing = True
         self._set_install_btn("Installing...", enabled=False)
@@ -827,12 +810,6 @@ class Plugin(BasePlugin):
         want_start = bool(checked)
 
         if want_start == is_running:
-            return
-
-        if _PLATFORM != "Darwin" and want_start and not _safe(
-                is_vpn_connected, True):
-            self.app.show_notification("Connect VPN first", type="error")
-            self._set_toggle_checked(False)
             return
 
         self._agent_toggle.setEnabled(False)
