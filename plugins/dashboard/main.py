@@ -364,7 +364,8 @@ class _Panel(QFrame):
 
 
 # Bar colour per worst severity of a day (badge text colours of the theme).
-_SEV_KIND = {"critical": "critical", "high": "error", "medium": "warning", "low": "info"}
+_SEV_KIND = {"critical": "critical", "high": "error", "medium": "warning", "unknown": "warning",
+             "low": "info"}
 
 
 def _sev_color(sev) -> QColor:
@@ -934,7 +935,8 @@ class Plugin(BasePlugin):
             pass
 
     # ---- alert list and detail (slide in over the panels) ------------------
-    _SEV_PILL = {"critical": "error", "high": "error", "medium": "warning", "low": "info", "info": "ok"}
+    _SEV_PILL = {"critical": "error", "high": "error", "medium": "warning", "unknown": "warning",
+                 "low": "info", "info": "ok"}
     _KIND_ICON = {"triage": "activity", "hunt": "folder-search", "result": "shield-check"}
 
     def _push_page(self, page: Page) -> None:
