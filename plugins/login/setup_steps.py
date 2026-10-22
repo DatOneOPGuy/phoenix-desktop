@@ -803,6 +803,29 @@ def _wazuh_reenroll(on_status) -> bool:
     return _wazuh_running()
 
 
+def _enrolled_for_sign_in() -> bool:
+    """Was the agent enrolled for the Matrix device signed in now? After a
+    sign-out the server has deleted the old agent, while the local one may
+    still be installed and running (with a key the manager no longer has)."""
+    try:
+        from plugins.wazuh.agent import enrollment
+        return enrollment.enrolled_for_this_sign_in()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[EP-SETUP] enrollment record unreadable: {e}")
+        return True
+
+
+def _mark_enrolled() -> None:
+    """Record the enrollment for this sign-in. Already done by a successful
+    API enrollment; this covers the agent-auth fallback."""
+    try:
+        from plugins.wazuh.agent import enrollment
+        if not enrollment.enrolled_for_this_sign_in():
+            enrollment.mark_enrolled()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[EP-SETUP] could not record the enrollment: {e}")
+
+
 # Human-readable messages for Wazuh installer failure reasons. Mirrors the
 # mapping the Endpoint plugin's own UI uses (plugins/wazuh/main.py) so the
 # wizard explains failures the same clear way instead of "didn't finish".
@@ -898,7 +921,8 @@ class _EndpointStepMac(SetupStep):
         # pending/unknown are treated as OK so the step never hangs on a slow or
         # unreadable state file.
         return (_wazuh_installed() and _wazuh_running()
-                and _wazuh_connection() != "disconnected")
+                and _wazuh_connection() != "disconnected"
+                and _enrolled_for_sign_in())
 
     def check_failed(self):
         if self._failed:
@@ -1024,6 +1048,16 @@ class _EndpointStepMac(SetupStep):
                     # dead-key). Recover by re-enrolling under a fresh identity.
                     logger.info("[EP-SETUP] running but disconnected — re-enrolling")
                     _wazuh_reenroll(on_status)
+                elif not _enrolled_for_sign_in():
+                    # Running, but enrolled for an earlier sign-in, whose agent
+                    # the server deleted at sign-out.
+                    logger.info("[EP-SETUP] enrolled for an earlier sign-in — re-enrolling")
+                    if not _wazuh_reenroll(on_status):
+                        self._failed = (
+                            "Couldn't enroll the endpoint agent with the monitoring "
+                            "server. Check your internet connection and try again.")
+                        return
+            _mark_enrolled()
 
             # Phase 5: link ClamAV → Wazuh if antivirus is also set up.
             _maybe_forward_clamav(on_status)
@@ -1056,7 +1090,8 @@ class _EndpointStepDirect(SetupStep):
         if self._working:
             return False
         return (_wazuh_installed() and _wazuh_running()
-                and _wazuh_connection() != "disconnected")
+                and _wazuh_connection() != "disconnected"
+                and _enrolled_for_sign_in())
 
     def begin(self, on_status):
         # Windows/Linux full_install() returns only a bool, so classify the
@@ -1108,6 +1143,17 @@ class _EndpointStepDirect(SetupStep):
                 # re-enroll under a fresh identity to recover.
                 logger.info("[EP-SETUP] running but disconnected — re-enrolling")
                 _wazuh_reenroll(_status)
+            elif not _enrolled_for_sign_in():
+                # Running, but enrolled for an earlier sign-in, whose agent the
+                # server deleted at sign-out.
+                logger.info("[EP-SETUP] enrolled for an earlier sign-in — re-enrolling")
+                if not _wazuh_reenroll(_status):
+                    self._failed = (
+                        "Couldn't enroll the endpoint agent with the monitoring "
+                        "server. Check your internet connection and try again."
+                    )
+                    return
+            _mark_enrolled()
             # Link ClamAV → Wazuh if antivirus is also set up.
             _maybe_forward_clamav(_status)
 
