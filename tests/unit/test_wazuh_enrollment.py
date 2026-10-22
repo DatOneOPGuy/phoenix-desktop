@@ -146,3 +146,28 @@ class TestWindowsInstall:
         script = ww._build_install_script(None, r"C:\t\p.msi", "host", "grp", r"C:\b")
         assert "agent-auth.exe" in script
         assert "-G 'grp'" in script
+
+
+@pytest.mark.unit
+class TestMsiLog:
+    def test_install_script_writes_a_verbose_msi_log(self):
+        from plugins.wazuh.agent import wazuh_functions_windows as ww
+        script = ww._build_install_script(None, r"C:\t\p.msi", "host", "grp", r"C:\b")
+        assert r"'/l*v','C:\t\p-install.log'" in script
+
+    def test_summary_names_the_exit_code_and_failing_action(self, tmp_path):
+        from plugins.wazuh.agent import wazuh_functions_windows as ww
+        log = tmp_path / "p-install.log"
+        log.write_text(
+            "Action start 10:00:01: InstallFiles.\n"
+            "Error 1920. Service 'Phoenix' (WazuhSvc) failed to start.\n"
+            "Action ended 10:00:02: InstallFinalize. Return value 3.\n"
+            "MSI (s) (A0:B4) [10:00:03:000]: MainEngineThread is returning 1603\n",
+            encoding="utf-16")
+        why = ww.msi_failure_summary(str(log))
+        assert why.startswith("msiexec exit code 1603 (the installer hit a fatal error)")
+        assert "Error 1920" in why
+
+    def test_summary_is_empty_without_a_log(self, tmp_path):
+        from plugins.wazuh.agent import wazuh_functions_windows as ww
+        assert ww.msi_failure_summary(str(tmp_path / "missing.log")) == ""

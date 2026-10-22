@@ -678,6 +678,51 @@ def remove_agent(wipe_keys: bool = False):
     return success
 
 
+def _msi_log_path(msi_path):
+    """Where msiexec writes its verbose log for *msi_path* (next to the package)."""
+    return os.path.splitext(msi_path)[0] + "-install.log"
+
+
+_MSI_EXIT_MEANING = {
+    1602: "the install was cancelled",
+    1603: "the installer hit a fatal error",
+    1618: "another installation is already running",
+    1638: "another version of the agent is already installed",
+    1925: "the installer needs administrator rights",
+}
+
+
+def msi_failure_summary(log_path, max_lines=25):
+    """Explain a failed MSI install from its verbose log, for our own log.
+
+    Returns "" when there is no log. Otherwise the exit code (from the
+    "MainEngineThread is returning N" line) and the lines before the first
+    "Return value 3", which is where Windows Installer records the failing
+    action and its error.
+    """
+    try:
+        with open(log_path, encoding="utf-16", errors="replace") as f:
+            lines = f.read().splitlines()
+    except UnicodeError:
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return ""
+    code = None
+    for line in lines:
+        m = re.search(r"MainEngineThread is returning (\d+)", line)
+        if m:
+            code = int(m.group(1))
+    summary = [f"msiexec exit code {code}"
+               + (f" ({_MSI_EXIT_MEANING[code]})" if code in _MSI_EXIT_MEANING else "")
+               if code is not None else "msiexec exit code unknown"]
+    for i, line in enumerate(lines):
+        if "Return value 3" in line:
+            summary += [x for x in lines[max(0, i - max_lines):i + 1] if x.strip()]
+            break
+    return "\n".join(summary)
+
+
 def _build_install_script(sysmon, msi_path, agent_name, agent_group, backup_dir, enrolled=None):
     """Assemble ONE elevated PowerShell script for every privileged install step.
 
@@ -711,6 +756,8 @@ def _build_install_script(sysmon, msi_path, agent_name, agent_group, backup_dir,
         _ps_quote(f"WAZUH_REGISTRATION_PORT={WAZUH_REGISTRATION_PORT}"),
         _ps_quote(f"WAZUH_AGENT_NAME={agent_name}"),
         _ps_quote(f"WAZUH_AGENT_GROUP={agent_group}"),
+        "'/l*v'",
+        _ps_quote(_msi_log_path(msi_path)),
     ])
 
     parts = ["$ErrorActionPreference = 'Continue'"]
@@ -800,6 +847,8 @@ def full_install(progress_callback=None):
 
     if not is_agent_installed():
         logger.error(f"Install failed (agent not present): {output}")
+        why = msi_failure_summary(_msi_log_path(msi_path))
+        logger.error(f"[WAZUH] MSI log {_msi_log_path(msi_path)}:\n{why or 'no MSI log written'}")
         _p("Installation failed")
         return False
 
