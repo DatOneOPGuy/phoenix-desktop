@@ -72,11 +72,15 @@ class SetupStep:
     def _run_bg(self, fn):
         """Run fn() on a daemon thread, capturing exceptions to _failed."""
         def _worker():
+            from utils import http_trace
+            http_trace.event(f"setup step '{self.key}' ({type(self).__name__}) begins")
             try:
                 fn()
             except Exception as e:  # noqa: BLE001 — surface, never crash the UI
                 logger.error(f"[SETUP] Step '{self.key}' failed: {e}")
                 self._failed = "Something went wrong. You can try again or skip."
+            http_trace.event(f"setup step '{self.key}' work finished",
+                             {"failed": self._failed, "activated": self._activated})
         threading.Thread(target=_worker, daemon=True).start()
 
 
