@@ -213,6 +213,8 @@ def main() -> int:
     # console windows. No-op on other platforms.
     from utils.win_console import suppress_child_console_windows
     suppress_child_console_windows()
+    # Linux build: children get the system's libraries, not the bundle's.
+    functions.restore_system_library_path()
 
     parser = argparse.ArgumentParser(
         description="Phoenix Desktop Application",
