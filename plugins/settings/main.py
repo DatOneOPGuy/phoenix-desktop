@@ -65,7 +65,11 @@ def update_check_text(result) -> str:
     """Status line for a utils.updates.channel.check() result."""
     if result is None:
         return "This copy of Phoenix isn't updated from the Phoenix update channel"
-    if result.available:
+    if result.available and str(result.os_key).startswith("linux"):
+        # The package set up the Phoenix apt/dnf/pacman repository.
+        text = (f"Phoenix build {result.latest.build} is available: your system's "
+                "software updates install it (or phoenix.exposed/apps)")
+    elif result.available:
         text = (f"Phoenix build {result.latest.build} is available: "
                 "download it from phoenix.exposed/apps")
     else:

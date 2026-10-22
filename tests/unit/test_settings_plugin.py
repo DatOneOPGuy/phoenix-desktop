@@ -419,9 +419,9 @@ class TestHandleUninstall:
 # _check_for_updates
 # ---------------------------------------------------------------------------
 
-def _check_result(available=False, build=202610221500, stale=False):
+def _check_result(available=False, build=202610221500, stale=False, os_key="windows"):
     latest = MagicMock(build=build, expires="2026-10-01")
-    return MagicMock(available=available, latest=latest, stale=stale)
+    return MagicMock(available=available, latest=latest, stale=stale, os_key=os_key)
 
 
 @pytest.mark.unit
@@ -442,6 +442,11 @@ class TestCheckForUpdates:
     def test_update_available(self, built_plugin):
         text = self._run_worker(built_plugin, return_value=_check_result(available=True))
         assert "202610221500 is available" in text
+
+    def test_update_available_on_linux_comes_from_the_repository(self, built_plugin):
+        text = self._run_worker(built_plugin, return_value=_check_result(
+            available=True, os_key="linux-rpm"))
+        assert "software updates install it" in text
 
     def test_up_to_date(self, built_plugin):
         assert self._run_worker(built_plugin, return_value=_check_result()) == "Phoenix is up to date"

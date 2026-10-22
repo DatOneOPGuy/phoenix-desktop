@@ -41,6 +41,10 @@ conflicts=('resistine')
 replaces=('resistine')
 # PyInstaller files must ship untouched.
 options=('!strip' '!debug' '!emptydirs')
+# The Phoenix repository (packaging/linux/repo): its key goes into pacman's
+# keyring on install; enabling it is one Include in /etc/pacman.conf.
+backup=('etc/pacman.d/phoenix.conf')
+install=phoenix.install
 source=("phoenix-${_relver}-x86_64.tar.xz")
 sha256sums=('@SHA256@')
 

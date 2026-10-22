@@ -75,20 +75,42 @@ chmod 755 $root/usr/bin/phoenix
 cp packaging/linux/phoenix.desktop $root/usr/share/applications/
 cp resources/icons/app_icon.png $root/usr/share/pixmaps/phoenix.png
 
+# Each package also sets up the Phoenix repository for its package manager
+# (packaging/linux/repo; served by scripts/build/publish-linux-repos.sh), so
+# the system updater installs later builds.
+key=packaging/linux/phoenix-archive-keyring.asc
+fpr=$(gpg --show-keys --with-colons $key | awk -F: "/^fpr/ {print \$10; exit}")
+[ -n "$fpr" ] || { echo "no public key in $key" >&2; exit 1; }
+
 # .deb
 deb=/stage/deb
 cp -a $root $deb
+install -Dm644 packaging/linux/repo/phoenix.sources $deb/etc/apt/sources.list.d/phoenix.sources
+mkdir -p $deb/usr/share/keyrings
+gpg --dearmor <$key >$deb/usr/share/keyrings/phoenix-archive-keyring.gpg
+chmod 644 $deb/usr/share/keyrings/phoenix-archive-keyring.gpg
 mkdir -p $deb/DEBIAN
+echo /etc/apt/sources.list.d/phoenix.sources >$deb/DEBIAN/conffiles
 sed "s/\${VERSION}/$DEB_VERSION/g" packaging/linux/control.template >$deb/DEBIAN/control
 install -m 755 packaging/linux/postinst packaging/linux/postrm $deb/DEBIAN/
 dpkg-deb --root-owner-group --build $deb /out/phoenix_${DEB_VERSION#*:}_amd64.deb
 
 # .rpm
+rpmroot=/stage/rpmroot
+cp -a $root $rpmroot
+install -Dm644 packaging/linux/repo/phoenix.repo $rpmroot/etc/yum.repos.d/phoenix.repo
+install -Dm644 $key $rpmroot/etc/pki/rpm-gpg/RPM-GPG-KEY-phoenix
+install -Dm644 packaging/linux/repo/phoenix-zypp.repo $rpmroot/usr/share/phoenix/phoenix-zypp.repo
 sed -e "s/@VERSION@/$RPM_VERSION/" -e "s/@RELEASE@/$BUILD/" packaging/linux/phoenix.spec.in >/stage/phoenix.spec
-rpmbuild -bb --quiet --define "_topdir /stage/rpm" --define "_phoenix_root $root" /stage/phoenix.spec
+rpmbuild -bb --quiet --define "_topdir /stage/rpm" --define "_phoenix_root $rpmroot" /stage/phoenix.spec
 cp /stage/rpm/RPMS/x86_64/*.rpm /out/
 
-# Staged root for the Arch PKGBUILD (packaged below in an Arch container).
+# Staged root for the Arch PKGBUILD (packaged below in an Arch container),
+# with the repository config and the key for pacman-key --populate phoenix.
+install -Dm644 packaging/linux/repo/phoenix-pacman.conf $root/etc/pacman.d/phoenix.conf
+install -Dm644 $key $root/usr/share/pacman/keyrings/phoenix.gpg
+echo "$fpr:4:" >$root/usr/share/pacman/keyrings/phoenix-trusted
+chmod 644 $root/usr/share/pacman/keyrings/phoenix-trusted
 mkdir -p /stage/arch
 cp LICENSE.md /stage/arch/
 mv $root /stage/arch/root
@@ -102,13 +124,14 @@ TARBALL="phoenix-${VERSION}-${BUILD}-x86_64.tar.xz"
 SHA=$(sha256sum "$OUT/$TARBALL" | cut -d" " -f1)
 sed -e "s/@PKGVER@/$ARCH_VERSION/" -e "s/@PKGREL@/$BUILD/" -e "s/@VERSION@/$VERSION-$BUILD/" -e "s/@SHA256@/$SHA/" \
 	packaging/linux/arch/PKGBUILD >"$OUT/PKGBUILD"
+cp packaging/linux/repo/phoenix.install "$OUT/phoenix.install"
 docker run --rm \
 	-v "$PWD/$OUT:/out" \
 	-e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" -e TARBALL="$TARBALL" \
 	archlinux:base-devel bash -euo pipefail -c '
 useradd -m build
 install -d -o build /build
-cp /out/PKGBUILD "/out/$TARBALL" /build/
+cp /out/PKGBUILD /out/phoenix.install "/out/$TARBALL" /build/
 chown build /build/*
 cd /build
 su build -c "PKGEXT=.pkg.tar.xz makepkg -f --nodeps --noconfirm" >/dev/null
