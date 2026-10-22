@@ -1,0 +1,40 @@
+# RPM spec for the PyInstaller build in /opt/phoenix. Filled in and run by
+# scripts/build/build-linux-packages.sh; @VERSION@ and @RELEASE@ are replaced.
+
+Name:           phoenix
+Version:        @VERSION@
+Release:        @RELEASE@
+Summary:        Phoenix Desktop Application
+License:        GPL-2.0-or-later
+URL:            https://phoenix.exposed
+BuildArch:      x86_64
+
+# The bundle carries its own Python and Qt; don't scan it for library deps.
+AutoReqProv:    no
+Requires:       wireguard-tools
+Requires:       (xcb-util-cursor or libxcb-cursor0)
+Obsoletes:      resistine
+Provides:       resistine
+
+# Ship the PyInstaller files untouched: no stripping, debuginfo or build-id links.
+%global debug_package %{nil}
+%global __os_install_post %{nil}
+%define _build_id_links none
+
+%description
+Phoenix is a security endpoint and VPN manager.
+
+%install
+cp -a %{_phoenix_root}/. %{buildroot}/
+
+%post
+update-desktop-database -q /usr/share/applications >/dev/null 2>&1 || :
+
+%postun
+update-desktop-database -q /usr/share/applications >/dev/null 2>&1 || :
+
+%files
+/opt/phoenix
+/usr/bin/phoenix
+/usr/share/applications/phoenix.desktop
+/usr/share/pixmaps/phoenix.png
