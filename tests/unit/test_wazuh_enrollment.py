@@ -171,3 +171,15 @@ class TestMsiLog:
     def test_summary_is_empty_without_a_log(self, tmp_path):
         from plugins.wazuh.agent import wazuh_functions_windows as ww
         assert ww.msi_failure_summary(str(tmp_path / "missing.log")) == ""
+
+    def test_uninstall_finds_the_phoenix_msi_by_name(self):
+        from plugins.wazuh.agent import wazuh_functions_windows as ww
+        ps = ww._PS_UNINSTALL_AGENT_MSI
+        assert "$_.DisplayName -eq 'Phoenix Agent'" in ps
+        assert "'/x', $_.PSChildName" in ps
+        assert "Win32_Product" not in ps
+
+    def test_install_clears_a_registration_without_files_first(self):
+        from plugins.wazuh.agent import wazuh_functions_windows as ww
+        script = ww._build_install_script(None, r"C:\t\p.msi", "host", "grp", r"C:\b")
+        assert script.index(ww._PS_UNINSTALL_AGENT_MSI) < script.index("'/i'")

@@ -664,9 +664,8 @@ def remove_agent(wipe_keys: bool = False):
     script = (
         f"NET STOP {_SERVICE_NAME} 2>$null; "
         f"{key_phase}"
-        # Uninstall via MSI product code lookup
-        f"$app = Get-WmiObject -Class Win32_Product | Where-Object {{ $_.Name -like '*Wazuh*' }}; "
-        f"if ($app) {{ $app.Uninstall() }}; "
+        # Uninstall the MSI, so Windows no longer counts the agent as installed
+        f"{_PS_UNINSTALL_AGENT_MSI}; "
         # Fallback: remove directory
         f"if (Test-Path {_ps_quote(WINDOWS_WAZUH_DIR)}) {{ Remove-Item -Recurse -Force {_ps_quote(WINDOWS_WAZUH_DIR)} }}"
     )
@@ -676,6 +675,20 @@ def remove_agent(wipe_keys: bool = False):
     else:
         logger.error(f"Failed to remove agent: {output}")
     return success
+
+
+# Uninstalls every registered agent MSI (ours is "Phoenix Agent"; older ones
+# "Wazuh Agent ...") by product code, read from the Uninstall registry keys.
+# Win32_Product is avoided: it is slow and makes Windows check every MSI.
+_PS_UNINSTALL_AGENT_MSI = (
+    "Get-ItemProperty "
+    "'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',"
+    "'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' "
+    "-ErrorAction SilentlyContinue | "
+    "Where-Object { $_.DisplayName -eq 'Phoenix Agent' -or $_.DisplayName -like 'Wazuh Agent*' } | "
+    "ForEach-Object { if ($_.PSChildName -match '^\\{[0-9A-Fa-f-]{36}\\}$') { "
+    "Start-Process -FilePath 'msiexec.exe' -Wait -ArgumentList @('/x', $_.PSChildName, '/qn', '/norestart') } }"
+)
 
 
 def _msi_log_path(msi_path):
@@ -765,6 +778,14 @@ def _build_install_script(sysmon, msi_path, agent_name, agent_group, backup_dir,
     # Sysmon (optional — folded in only if it downloaded successfully).
     if sysmon:
         parts.append(_guard(_sysmon_install_ps(sysmon)))
+
+    # An agent MSI still registered without its files (its folder was deleted
+    # by hand, or by an older uninstall) makes msiexec /i a silent no-op.
+    # Uninstall that registration first.
+    parts.append(_guard(
+        f"if (-not (Test-Path {_ps_quote(os.path.join(WINDOWS_WAZUH_DIR, 'wazuh-agent.exe'))})) "
+        f"{{ {_PS_UNINSTALL_AGENT_MSI} }}"
+    ))
 
     # Wazuh MSI — wait for full completion before configuring/enrolling.
     parts.append(_guard(
