@@ -100,6 +100,12 @@ def _build_app() -> tuple[QApplication, object]:
     # WM_CLASS approach the CTk app used). Harmless elsewhere.
     qt_app.setDesktopFileName("phoenix")
 
+    # One Phoenix per user: a second launch shows the running one and exits.
+    from utils import single_instance
+    if not single_instance.acquire():
+        logger.info("Phoenix is already running; showed that window instead")
+        return qt_app, None
+
     from gui.app_window import AppWindow
 
     window = AppWindow(qt_app)
@@ -157,7 +163,18 @@ def _build_app() -> tuple[QApplication, object]:
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Failed to start system tray: {e}")
 
+    single_instance.listen(lambda: _bring_forward(window))
+
     return qt_app, window
+
+
+def _bring_forward(window) -> None:
+    """Show the window, also when minimized or hidden to the tray."""
+    if window.isMinimized():
+        window.showNormal()
+    window.show()
+    window.raise_()
+    window.activateWindow()
 
 
 def _session_still_valid() -> bool:
@@ -250,6 +267,8 @@ def main() -> int:
             logger.info("Removed the old /Applications/Resistine.app")
 
     qt_app, window = _build_app()
+    if window is None:
+        return 0
 
     if DEBUG:
         logger.info("Debug mode enabled")
