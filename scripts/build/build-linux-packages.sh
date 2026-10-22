@@ -48,6 +48,8 @@ uv venv -q --python 3.13 /venv
 VIRTUAL_ENV=/venv uv pip install -q -r scripts/requirements/requirements-linux.txt
 /venv/bin/pyinstaller --clean -y packaging/Resistine.spec
 [ -x dist/Phoenix/Phoenix ]
+# The collected libgcc_s needs glibc 2.35 (RHEL 9 has 2.34); every system has its own.
+find dist/Phoenix/_internal -maxdepth 1 -name "libgcc_s.so.1" -delete
 
 # One staged root for both formats.
 root=/stage/root
