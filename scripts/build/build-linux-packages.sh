@@ -35,6 +35,8 @@ docker run --rm \
 	-e VERSION="$VERSION" -e RPM_VERSION="$RPM_VERSION" \
 	-e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
 	-w /src "$IMAGE" bash -euo pipefail -c '
+# Debian 11 is past end of life: use the snapshot the image was built from.
+sed -i -e "s|^deb http|# deb http|" -e "s|^# deb http://snapshot|deb [check-valid-until=no] http://snapshot|" /etc/apt/sources.list
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends rpm binutils >/dev/null
 
