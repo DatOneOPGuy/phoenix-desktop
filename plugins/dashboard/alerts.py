@@ -16,6 +16,10 @@ siem-bot sends three kinds of message (see parse()):
 The prose is model output, so a word like "critical system files" says
 nothing about severity: only the structured fields count. Bodies are
 untrusted and parsed defensively. No Qt in here.
+
+"unknown" is a severity of its own, for an alert that could not be read
+on this device and a hunt that could not decide: it ranks above low, so
+not knowing never looks calmer than a minor alert.
 """
 
 from __future__ import annotations
@@ -25,10 +29,12 @@ import time
 from datetime import datetime, timedelta
 from typing import Optional
 
+from plugins.chat.siem_alerts import UNDECRYPTABLE
+
 SHOWN = 4
 _SEV_EMOJI = {"🚨": "critical", "🔴": "high", "🟠": "medium", "🟡": "low", "⚪": "info"}
 _SEV_WORD = re.compile(r"\b(critical|high|medium|low)\b", re.IGNORECASE)
-_SEV_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+_SEV_RANK = {"critical": 4, "high": 3, "medium": 2, "unknown": 1.5, "low": 1, "info": 0}
 _MARKUP = re.compile(r"[*_`#>]+")
 
 
@@ -148,9 +154,12 @@ def parse(body: str) -> dict:
         out["verdict"] = m_result.group(1).strip().capitalize()
         out["fp"] = int(m_result.group(2)) if m_result.group(2) else None
         v = out["verdict"].lower()
-        out["severity"] = ("info" if "false" in v else "high" if "true" in v
-                           else _first_marker(first) if _first_marker(first) != "info" else "low")
+        # The result's 🟢/🟡/🔴 is the verdict's colour, not a severity:
+        # an inconclusive (or unadjudicated) hunt is unknown, not low.
+        out["severity"] = "info" if "false" in v else "high" if "true" in v else "unknown"
         out["title"] = f"{out['verdict']}: {out['what']}" if out["what"] else f"Hunt result: {out['verdict']}"
+    elif body.strip() == UNDECRYPTABLE:
+        out["severity"], out["title"] = "unknown", "Alert not readable on this device"
     else:
         out["severity"] = _first_marker(body)
         out["title"] = title(body)
@@ -188,7 +197,7 @@ def ago(ts: Optional[float], now: Optional[float] = None) -> str:
     return f"{days} day{'s' if days != 1 else ''} ago"
 
 
-_DOT = {"critical": "🚨", "high": "🔴", "medium": "🟠", "low": "🟡", "info": "⚪"}
+_DOT = {"critical": "🚨", "high": "🔴", "medium": "🟠", "unknown": "❔", "low": "🟡", "info": "⚪"}
 
 
 def detail_text(body: str) -> str:
@@ -227,7 +236,7 @@ def newest_first(alerts: list) -> list:
 # --------------------------------------------------------------------------
 
 DAYS = 7
-SEV_ORDER = ("critical", "high", "medium", "low", "info")
+SEV_ORDER = ("critical", "high", "medium", "unknown", "low", "info")
 
 
 def activity(alerts: list, now: Optional[float] = None, days: int = DAYS) -> list:
@@ -306,7 +315,8 @@ def panel_data(alerts: list, unread: int, now: Optional[float] = None) -> dict:
     unread = max(0, min(int(unread or 0), len(alerts)))
     worst_new = max((_SEV_RANK[severity(a.get("body", ""))] for a in newest[:unread]), default=-1)
     if unread:
-        kind = "error" if worst_new >= _SEV_RANK["high"] else "warning" if worst_new >= 2 else "info"
+        kind = ("error" if worst_new >= _SEV_RANK["high"] else
+                "warning" if worst_new >= _SEV_RANK["unknown"] else "info")
         badge = (kind, f"{unread} new")
     else:
         badge = ("ok", "No new alerts")

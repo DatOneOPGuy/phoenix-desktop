@@ -111,7 +111,7 @@ class TestSiemBotMessages:
         fp, inc = ra.parse(RESULT_FP), ra.parse(RESULT_INC)
         assert (fp["kind"], fp["verdict"], fp["fp"], fp["severity"]) == ("result", "False positive", 55, "info")
         assert fp["title"] == "False positive: File modified - /etc/group"
-        assert (inc["verdict"], inc["severity"]) == ("Inconclusive", "low")
+        assert (inc["verdict"], inc["severity"]) == ("Inconclusive", "unknown")  # 🟡 is the verdict's colour
         assert ra.parse(RESULT_FP.replace("🟢", "🔴").replace("False positive", "True positive"))["severity"] == "high"
 
     def test_detail_text_drops_the_header_lines(self):
@@ -162,6 +162,16 @@ class TestPanel:
 
     def test_bad_input(self):
         assert ra.panel_data(["junk", None], 99, NOW)["badge"] == ("ok", "Quiet")
+
+    def test_unreadable_alerts_are_unknown_not_calm(self):
+        from plugins.chat.siem_alerts import UNDECRYPTABLE
+        i = ra.parse(UNDECRYPTABLE)
+        assert (i["severity"], i["title"]) == ("unknown", "Alert not readable on this device")
+        d = ra.panel_data([alert(UNDECRYPTABLE, 2, "$u"), alert("🟡 old low", 9, "l")], 1, NOW)
+        assert d["badge"] == ("warning", "1 new")  # not knowing never reads calmer than low
+        assert d["rows"]["2 min ago"].startswith("❔ ")
+        assert d["rows"]["Last 7 days"] == "1 unknown · 1 low"
+        assert ra.notification(alert(UNDECRYPTABLE, 0, "$u"), NOW - 60) is None
 
 
 @pytest.fixture

@@ -55,6 +55,7 @@ _TURN_TIMEOUT = 15 * 60
 _INVITE_POLL = 120         # seconds between checks for a new SIEM-alerts invite
 _DISCOVER_EVERY = 15       # polls between scans for alert rooms joined elsewhere (30 min)
 _ALERTS_RESTART = 300      # min seconds between alerts-listener (re)starts
+_MAX_PENDING_ALERTS = 100  # undecryptable alerts kept for a retry when their key arrives
 
 
 class MatrixTransportError(Exception):
@@ -158,6 +159,9 @@ class MatrixService:
         self._alert_rooms: set[str] = set(siem_alerts.alert_rooms())
         self._full_state_next = False
         self._skipped_old = 0
+        # Alerts stored as UNDECRYPTABLE whose key may still arrive:
+        # event_id -> (room_id, MegolmEvent); retried after every sync.
+        self._pending_alerts: dict = {}
 
     @property
     def alerts_only(self) -> bool:
@@ -366,6 +370,26 @@ class MatrixService:
                 await client.keys_query()
             if client.should_claim_keys:
                 await client.keys_claim(client.get_users_for_key_claiming())
+            self._retry_pending_alerts()
+
+    def _retry_pending_alerts(self) -> None:
+        """Decrypt alerts whose room key arrived after they did (a late
+        m.room_key, or one answering our key request); the store then
+        replaces their placeholder with the real text."""
+        from nio import MegolmEvent
+
+        for event_id, (room_id, event) in list(self._pending_alerts.items()):
+            try:
+                decrypted = self._client.decrypt_event(event)
+            except Exception:  # noqa: BLE001 — still no key
+                continue
+            if isinstance(decrypted, MegolmEvent):
+                continue
+            del self._pending_alerts[event_id]
+            body = getattr(decrypted, "body", None)
+            if isinstance(body, str):
+                logger.info(f"[CHAT-MATRIX] SIEM alert {event_id} decrypted after its key arrived")
+                siem_alerts.publish(room_id, event_id, body, getattr(event, "server_timestamp", None))
 
     def _sync_filter(self) -> dict:
         """Only ever fetch the assistant DM and the SIEM-alert DMs (alerts-only:
@@ -538,9 +562,15 @@ class MatrixService:
                 if self._skipped_old in (1, 10, 100):
                     logger.info(f"[CHAT-MATRIX] {self._skipped_old} older SIEM alert(s) predate this device; skipped")
                 return
-            logger.warning(f"[CHAT-MATRIX] cannot decrypt SIEM alert {event.event_id}")
+            logger.warning(f"[CHAT-MATRIX] cannot decrypt SIEM alert {event.event_id}; asking for its key")
             siem_alerts.publish(room.room_id, event.event_id, siem_alerts.UNDECRYPTABLE,
                                 getattr(event, "server_timestamp", None))
+            if len(self._pending_alerts) < _MAX_PENDING_ALERTS:
+                self._pending_alerts[event.event_id] = (room.room_id, event)
+            try:  # the user's other devices (Element) may hold the key
+                await self._client.request_room_key(event)
+            except Exception as e:  # noqa: BLE001 — already requested for this session, or offline
+                logger.debug(f"[CHAT-MATRIX] room key request for {event.event_id}: {e}")
             return
         q = self._turn_q
         if q is None or room.room_id != self.room_id or event.sender != self.bot:
