@@ -423,9 +423,9 @@ class Plugin(BasePlugin):
         except Exception:
             pass
         try:
-            from utils.updates.version import get_current_version
-            version = get_current_version()
-            if version != "0.0.0":
+            from utils.updates.version import get_display_version
+            version = get_display_version()
+            if not version.startswith("0.0.0"):
                 return version
         except Exception:
             pass

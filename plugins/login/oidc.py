@@ -57,8 +57,11 @@ class Cancelled(OIDCError):
 
 def _user_agent() -> str:
     try:
-        from utils.updates.version import get_current_version
+        from utils.updates.version import get_build, get_current_version
         ver = get_current_version()
+        build = get_build()
+        if build:
+            ver += f"+{build}"
     except Exception:
         ver = "dev"
     return f"Phoenix-Desktop/{ver} ({platform.system()})"
