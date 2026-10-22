@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 
-# Description: Build the Linux app once in a Debian 11 container and package
-#   it as both .deb and .rpm. Building on an old glibc (2.31) lets the
-#   PyInstaller bundle run on Ubuntu 22.04+, Debian 11+, Fedora and RHEL 9.
-#   A build made on the host (NixOS) would only run on NixOS.
+# Description: Build the Linux app once in an AlmaLinux 9 container and
+#   package it as both .deb and .rpm. glibc 2.34 there is the oldest PyQt6's
+#   wheels support, so the PyInstaller bundle runs on RHEL/Alma/Rocky 9+,
+#   Ubuntu 22.04+, Debian 12+ and Fedora. A build made on the host (NixOS)
+#   would only run on NixOS.
 # Usage: ./scripts/build/build-linux-packages.sh
 # Output: dist/linux/phoenix_<version>_amd64.deb and phoenix-<version>-<rel>.x86_64.rpm
 # Needs: docker. Builds from the committed tree (git archive HEAD).
@@ -12,10 +13,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
-IMAGE="python:3.13-bullseye"
+IMAGE="almalinux:9"
 OUT="dist/linux"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/phoenix-linux.XXXXXX")"
-trap 'rm -rf "$WORK"' EXIT
+# The container writes the build tree as root; delete it from inside one.
+trap 'docker run --rm -v "$WORK:/w" "$IMAGE" find /w -mindepth 1 -delete >/dev/null 2>&1; rm -rf "$WORK"' EXIT
 
 VERSION=$(sed -nE "s/^VERSION\s*=\s*['\"]([^'\"]+)['\"].*/\1/p" packaging/Resistine.spec)
 [ -n "$VERSION" ] || {
@@ -35,14 +37,15 @@ docker run --rm \
 	-e VERSION="$VERSION" -e RPM_VERSION="$RPM_VERSION" \
 	-e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
 	-w /src "$IMAGE" bash -euo pipefail -c '
-# Debian 11 is past end of life: use the snapshot the image was built from.
-sed -i -e "s|^deb http|# deb http|" -e "s|^# deb http://snapshot|deb [check-valid-until=no] http://snapshot|" /etc/apt/sources.list
-apt-get update -qq
-apt-get install -y -qq --no-install-recommends rpm binutils >/dev/null
+dnf -q -y install epel-release >/dev/null
+dnf -q -y install dpkg rpm-build binutils python3-pip \
+	mesa-libGL mesa-libEGL libxkbcommon libxkbcommon-x11 fontconfig dbus-libs \
+	xcb-util-cursor xcb-util-wm xcb-util-image xcb-util-keysyms xcb-util-renderutil >/dev/null
 
-python -m venv /venv
-/venv/bin/pip install -q --upgrade pip
-/venv/bin/pip install -q -r scripts/requirements/requirements-linux.txt
+# Python 3.13 from uv (a shared-library build, which PyInstaller needs).
+pip3 install -q uv
+uv venv -q --python 3.13 /venv
+VIRTUAL_ENV=/venv uv pip install -q -r scripts/requirements/requirements-linux.txt
 /venv/bin/pyinstaller --clean -y packaging/Resistine.spec
 [ -x dist/Phoenix/Phoenix ]
 
