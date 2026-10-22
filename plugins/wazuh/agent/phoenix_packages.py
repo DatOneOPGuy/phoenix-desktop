@@ -344,11 +344,11 @@ def download(dest_dir: str, progress_callback: Optional[Callable[[str], None]] =
 
 
 def download_or_none(dest_dir: str, progress_callback: Optional[Callable[[str], None]] = None,
-                     filename: Optional[str] = None) -> Optional[str]:
+                     filename: Optional[str] = None, plat: Optional[str] = None) -> Optional[str]:
     """download() for the platform installers: the verified path, or None
     after logging the reason and showing it through ``progress_callback``."""
     try:
-        path, _ = download(dest_dir, progress_callback, filename=filename)
+        path, _ = download(dest_dir, progress_callback, plat=plat, filename=filename)
         return path
     except PackageError as e:
         logger.error(f"[PKG] {e}")
