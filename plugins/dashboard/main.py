@@ -1125,6 +1125,7 @@ class Plugin(BasePlugin):
     _PILLS = {
         mitigations.OPEN: ("error", "To fix"),
         mitigations.FIXED_HERE: ("ok", "Fixed here"),
+        mitigations.REBOOT: ("error", "Restart needed"),
         mitigations.UNKNOWN: ("info", "Can't check here"),
         mitigations.SERVER: ("info", "Next scan"),
         None: ("info", "Checking…"),
@@ -1146,7 +1147,8 @@ class Plugin(BasePlugin):
         page.spacing(14)
         page.add(muted(
             "Fixed here means the vulnerable version is no longer installed on this "
-            "machine. The daily scan confirms it and the item disappears. Phoenix never "
+            "machine. The daily scan confirms it and the item disappears. Restart needed "
+            "means the kernel is updated but the old one is still running. Phoenix never "
             "changes your system on its own: update packages with your system's "
             "software updater."))
         page.stretch()
@@ -1240,7 +1242,7 @@ class Plugin(BasePlugin):
         h.addLayout(text, 1)
         if state != mitigations.REMOTE:
             kind, label = self._PILLS.get(state, self._PILLS[None])
-            if state == mitigations.OPEN and item["severity"] not in ("critical", "high"):
+            if state in (mitigations.OPEN, mitigations.REBOOT) and item["severity"] not in ("critical", "high"):
                 kind = "warning"
             pill = QLabel()
             set_pill(pill, kind, label)
