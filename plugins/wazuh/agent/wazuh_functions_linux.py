@@ -184,12 +184,28 @@ def _set_ossec_enrollment(ossec_conf, agent_name, agent_group):
         _set_ossec_agent_name(ossec_conf, agent_name)
         + "\n"
         + (
-            f"if grep -q '<groups>' '{ossec_conf}'; then "
-            f"sed -i 's|<groups>.*</groups>|<groups>{agent_group}</groups>|' '{ossec_conf}'; "
-            f"else "
-            f"sed -i 's|<enrollment>|<enrollment>\\n      <groups>{agent_group}</groups>|' '{ossec_conf}'; "
-            f"fi"
+            # Only the <groups> inside <enrollment>: other modules have their
+            # own (syscollector's <groups>yes</groups>), and changing those
+            # stops wazuh-modulesd ("Invalid content for tag 'groups'").
+            f"sed -i '/<enrollment>/,/<\\/enrollment>/{{/<groups>/d}}' '{ossec_conf}'; "
+            f"sed -i 's|<enrollment>|<enrollment>\\n      <groups>{agent_group}</groups>|' '{ossec_conf}'"
         )
+        + "\n"
+        + _set_ossec_manager(ossec_conf)
+    )
+
+
+def _set_ossec_manager(ossec_conf):
+    """Shell that fills in the manager if the package left its placeholder.
+
+    The package's install script normally writes the manager from
+    WAZUH_MANAGER; when it fails (the 5.0.0-1 .deb's postinst looks in
+    /var/ossec instead of /opt/phoenix-agent), ossec.conf keeps MANAGER_IP and
+    wazuh-agentd exits with "Invalid server address found: 'MANAGER_IP'".
+    """
+    return (
+        f"sed -i -e 's|<endpoint>MANAGER_IP</endpoint>|<endpoint>{WAZUH_MANAGER}:{WAZUH_MANAGER_PORT}</endpoint>|' "
+        f"-e 's|<address>MANAGER_IP</address>|<address>{WAZUH_MANAGER}</address>|' '{ossec_conf}'"
     )
 
 
@@ -580,8 +596,7 @@ def full_install(progress_callback=None):
             "--home /var/ossec --shell /sbin/nologin -g wazuh wazuh) && "
             f"bsdtar -xpf '{pkg_path}' -C / && "
             "chown -R wazuh:wazuh /var/ossec && "
-            f"sed -i \"s|<address>.*</address>|<address>{WAZUH_MANAGER}</address>|\" '{ossec_conf}' && "
-            f"sed -i \"s|<groups>.*</groups>|<groups>{agent_group}</groups>|\" '{ossec_conf}'"
+            f"sed -i \"s|<address>.*</address>|<address>{WAZUH_MANAGER}</address>|\" '{ossec_conf}'"
         )
 
     agent_auth = f"{LINUX_WAZUH_DIR}/bin/agent-auth"
