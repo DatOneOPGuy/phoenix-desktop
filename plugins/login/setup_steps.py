@@ -1041,10 +1041,16 @@ class _EndpointStepDirect(SetupStep):
     )
     primary_label = "Install Endpoint Agent"
     working_label = "Installing endpoint agent…"
+    _working = False  # begin()'s worker is still installing/enrolling
 
     def is_complete(self) -> bool:
         # Installed AND running AND not a confirmed disconnect (dead key) — see
-        # _EndpointStepMac.is_complete for the reasoning.
+        # _EndpointStepMac.is_complete for the reasoning. Never while the
+        # worker runs: the package's postinst starts the service before the
+        # root script has written the enrollment key and restarted it, so
+        # "installed + running" turns true mid-install.
+        if self._working:
+            return False
         return (_wazuh_installed() and _wazuh_running()
                 and _wazuh_connection() != "disconnected")
 
@@ -1059,6 +1065,12 @@ class _EndpointStepDirect(SetupStep):
             on_status(str(msg))
 
         def _work():
+            try:
+                _install()
+            finally:
+                self._working = False
+
+        def _install():
             if not _wazuh_installed():
                 if _PLATFORM == "Linux":
                     from plugins.wazuh.agent.wazuh_functions_linux import full_install
@@ -1094,6 +1106,8 @@ class _EndpointStepDirect(SetupStep):
                 _wazuh_reenroll(_status)
             # Link ClamAV → Wazuh if antivirus is also set up.
             _maybe_forward_clamav(_status)
+
+        self._working = True
         self._run_bg(_work)
 
     def _install_fail_message(self) -> str:
