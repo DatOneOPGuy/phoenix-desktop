@@ -124,31 +124,31 @@ def manager(monkeypatch):
 @pytest.mark.unit
 class TestEnsureVpnConfig:
     def test_reuses_existing_phoenix_config(self, manager, tmp_path, monkeypatch):
-        conf = tmp_path / "resistine.conf"
+        conf = tmp_path / "phoenix.conf"
         conf.write_text("[Interface]\n")
-        manager.get_active_config_name.return_value = "resistine"
+        manager.get_active_config_name.return_value = "phoenix"
         manager.get_active_config_path.return_value = str(conf)
         monkeypatch.setattr(prov, "_vpn_backend", lambda: pytest.fail("no backend call"))
-        assert prov.ensure_vpn_config() == ("resistine", str(conf))
+        assert prov.ensure_vpn_config() == ("phoenix", str(conf))
 
     def test_provisions_and_activates(self, manager, monkeypatch):
         backend = MagicMock()
         backend.setup_vpn_keys.return_value = "CLIENTPUB="
-        backend.save_vpn_configuration.return_value = "/wg/resistine.conf"
+        backend.save_vpn_configuration.return_value = "/wg/phoenix.conf"
         monkeypatch.setattr(prov, "_vpn_backend", lambda: backend)
         monkeypatch.setattr(prov, "request_peer", lambda pub: CONFIG if pub == "CLIENTPUB=" else None)
         statuses = []
 
-        assert prov.ensure_vpn_config(statuses.append) == ("resistine", "/wg/resistine.conf")
-        backend.save_vpn_configuration.assert_called_once_with(CONFIG, "resistine")
-        manager.register_config.assert_called_once_with("resistine", source="phoenix")
-        manager.set_active_config.assert_called_once_with("resistine")
+        assert prov.ensure_vpn_config(statuses.append) == ("phoenix", "/wg/phoenix.conf")
+        backend.save_vpn_configuration.assert_called_once_with(CONFIG, "phoenix")
+        manager.register_config.assert_called_once_with("phoenix", source="phoenix")
+        manager.set_active_config.assert_called_once_with("phoenix")
         assert statuses == ["Creating your VPN keys…", "Getting your VPN configuration…"]
 
     def test_force_replaces_existing(self, manager, monkeypatch, tmp_path):
-        conf = tmp_path / "resistine.conf"
+        conf = tmp_path / "phoenix.conf"
         conf.write_text("x")
-        manager.get_active_config_name.return_value = "resistine"
+        manager.get_active_config_name.return_value = "phoenix"
         manager.get_active_config_path.return_value = str(conf)
         backend = MagicMock(setup_vpn_keys=MagicMock(return_value="K="),
                             save_vpn_configuration=MagicMock(return_value="/new"))
@@ -229,7 +229,7 @@ class TestLinuxWriterAndKeys:
 
     def test_config_includes_psk_and_keepalive(self, linux):
         assert linux.save_wireguard_keys("cHJpdmF0ZS1wcml2YXRlLXByaXZhdGUtcHJpdmF0ZTE=", "PUB=")
-        path = linux.save_vpn_configuration(CONFIG, "resistine")
+        path = linux.save_vpn_configuration(CONFIG, "phoenix")
         text = open(path).read()
         assert f"PresharedKey = {PSK}" in text
         assert "PersistentKeepalive = 25" in text
@@ -241,8 +241,8 @@ class TestLinuxWriterAndKeys:
         linux.save_wireguard_keys("cHJpdmF0ZS1wcml2YXRlLXByaXZhdGUtcHJpdmF0ZTE=", "PUB=")
         bad = json.loads(json.dumps(CONFIG))
         bad["Peer"]["PresharedKey"] = PSK + "\nPostUp = touch /tmp/pwned"
-        assert linux.save_vpn_configuration(bad, "resistine") is None
-        assert not (tmp_path / "resistine.conf").exists()
+        assert linux.save_vpn_configuration(bad, "phoenix") is None
+        assert not (tmp_path / "phoenix.conf").exists()
 
     def test_keys_are_encrypted_not_plaintext(self, linux, isolated_settings, tmp_path):
         assert linux.save_wireguard_keys("PRIV=", "PUB=")

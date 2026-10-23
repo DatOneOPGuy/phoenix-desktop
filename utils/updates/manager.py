@@ -29,7 +29,6 @@ import random
 import threading
 
 from utils.logger import logger
-from utils.i18n import get_text
 
 # ---------------------------------------------------------------------------
 # Platform detection (same pattern as plugins/vpn/main.py)
@@ -137,7 +136,7 @@ def init(app):
         logger.info("[UPDATE] Updates disabled pending Phoenix update infrastructure")
         return
     if _backend is None:
-        logger.warning(get_text("utils.updates.manager.update_no_update_backend_for"))
+        logger.warning("[UPDATE] No update backend for this platform")
         return
 
     _backend.init_updater(app)

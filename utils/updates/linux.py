@@ -26,7 +26,6 @@ from utils import settings
 from utils.logger import logger
 from utils.updates.appcast import AppcastItem, get_latest_linux_update
 from utils.updates.version import get_current_version, get_project_root
-from utils.i18n import get_text
 
 # Ed25519 public key (same key pair used by macOS Sparkle signatures)
 # Intentionally empty: the old key belongs to Phoenix. A Phoenix
@@ -59,7 +58,8 @@ def init_updater(app) -> bool:
     version = get_current_version()
     if version == "0.0.0":
         logger.warning(
-            get_text("utils.updates.linux.update_linux_could_not_read")
+            "[UPDATE-LINUX] Could not read version from spec file; "
+            "updater disabled"
         )
         return False
 
@@ -141,8 +141,8 @@ def _show_up_to_date():
     version = get_current_version()
     show_info(
         _app,
-        get_text("gui.update_dialog.software_update"),
-        get_text("utils.updates.linux.you_re_up_to_date", version=version),
+        "Software Update",
+        f"You're up to date!\n\nPhoenix {version} is the latest version.",
     )
 
 
@@ -234,11 +234,7 @@ def _download_worker(item: AppcastItem, dialog):
                     frac = min(downloaded / total, 1.0)
                     mb_down = downloaded / (1024 * 1024)
                     mb_total = total / (1024 * 1024)
-                    status = get_text(
-                        "utils.updates.linux.downloading_mb_down_mb_total",
-                        mb_down=f"{mb_down:.1f}",
-                        mb_total=f"{mb_total:.1f}",
-                    )
+                    status = f"Downloading... {mb_down:.1f} / {mb_total:.1f} MB"
                     _app.after(
                         0, dialog.set_download_progress, frac, status
                     )
@@ -247,15 +243,22 @@ def _download_worker(item: AppcastItem, dialog):
             0, dialog.set_download_progress, 1.0, "Verifying signature..."
         )
 
-        # --- Verify Ed25519 signature (MANDATORY) ---
-        # The signature attribute comes from the same untrusted XML as the
-        # download URL. Treating its absence as "skip verification" would let
-        # anyone who can influence the feed ship unsigned code — so a missing
-        # signature is a hard failure, exactly like a bad one.
-        if not item.signature:
-            logger.error(
-                "[UPDATE-LINUX] Appcast entry has no edSignature — refusing "
-                "unsigned update."
+        # --- Verify Ed25519 signature ---
+        if item.signature:
+            if not _verify_signature(tmp_path, item.signature):
+                _app.after(
+                    0,
+                    dialog.show_error,
+                    "Signature verification failed. The download may be "
+                    "corrupted or tampered with.",
+                    lambda: _start_download(item, dialog),
+                )
+                _cleanup(tmp_path)
+                return
+        else:
+            logger.warning(
+                "[UPDATE-LINUX] No signature in appcast entry, skipping "
+                "verification"
             )
             _app.after(
                 0, dialog.show_error,

@@ -20,7 +20,6 @@ from PyQt6.QtCore import (
 from PyQt6.QtWidgets import QGraphicsOpacityEffect, QLabel, QWidget
 
 from gui import theme
-from utils.i18n import get_text
 
 _COLORS = {
     "info": "#16A34A",
@@ -35,7 +34,7 @@ class Toast(QLabel):
         accent = _COLORS.get(kind, _COLORS["info"])
         bg = theme.color("card_bg")
         fg = theme.color("text_primary")
-        self.setText(get_text("gui.qt_toast.text", text=text))
+        self.setText(f"  {text}")
         self.setWordWrap(True)
         self.setStyleSheet(
             f"background-color: {bg}; color: {fg};"

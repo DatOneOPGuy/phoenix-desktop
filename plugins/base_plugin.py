@@ -39,6 +39,10 @@ class BasePlugin:
     # settle/reveal cascade, so this is a no-op flag.
     defer_reveal_until_settled = False
 
+    # Hidden plugins stay installed and loaded but get no sidebar entry or
+    # Dashboard card (e.g. the Store).
+    hidden = False
+
     def __init__(self, id, version, order, name, status, description,
                  supported_systems, translations, icon_light_path,
                  icon_dark_path, uninstall_enabled=True):
@@ -106,21 +110,6 @@ class BasePlugin:
     def get_name(self):
         return self.name
 
-    def get_display_name(self):
-        """Localized name for UI display (sidebar, titles).
-
-        get_name() stays the stable English identifier — it is compared
-        against literals throughout the app (navigation, plugin lookup) —
-        so localization happens only at display time via the catalog key
-        ``plugin.name.<name>`` with the identifier as fallback.
-        """
-        try:
-            from utils.i18n import get_text
-
-            return get_text(f"plugin.name.{self.name.lower()}")
-        except Exception:
-            return self.name
-
     def set_translations(self, translations):
         self.translations = translations
 
@@ -131,20 +120,7 @@ class BasePlugin:
         self.description = description
 
     def get_description(self):
-        """Localized description, resolved at display time.
-
-        Constructors pass an already-translated string, but that freezes
-        the app's *startup* language into the instance — a runtime
-        language switch rebuilds screens without re-instantiating
-        plugins. The canonical ``plugin.description.<name>`` catalog key
-        re-resolves on every call; the stored string is the fallback.
-        """
-        try:
-            from utils.i18n import get_text
-
-            return get_text(f"plugin.description.{self.name.lower()}")
-        except Exception:
-            return self.description
+        return self.description
 
     def set_supported_systems(self, supported_systems):
         self.supported_systems = supported_systems
@@ -164,8 +140,7 @@ class BasePlugin:
 
     @staticmethod
     def _tint(pm: QPixmap, color: str | None = None) -> QPixmap:
-        """Colorize a monochrome line icon to the theme's primary text colour
-        (or an explicit colour when given).
+        """Colorize a monochrome line icon to the theme's primary text colour.
 
         The shipped *_light.png assets are pale grey and wash out on the
         light card background; tinting keys the strokes to the theme (near-

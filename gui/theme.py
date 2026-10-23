@@ -37,11 +37,6 @@ PALETTE: dict[str, tuple[str, str]] = {
     "bubble_ai_bg": ("#FFFFFF", "#0D2340"),
     "bubble_ai_text": ("#0A1A33", "#FFFFFF"),
     "scroll_handle": ("#AEBBCB", "#2E4A70"),
-    # Protection-status colours consumed by antivirus/wazuh_overview screens.
-    "protect_ok_bg": ("#DCFCE7", "#0A2F1A"),
-    "protect_ok_text": ("#15803D", "#4ADE80"),
-    "protect_warn_bg": ("#FEF3C7", "#2D1F05"),
-    "protect_warn_text": ("#B45309", "#FBBF24"),
 }
 
 BADGE_BG: dict[str, tuple[str, str]] = {

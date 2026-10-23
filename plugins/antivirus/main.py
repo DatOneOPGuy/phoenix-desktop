@@ -33,7 +33,6 @@ from plugins.antivirus import clamav
 from plugins.base_plugin import BasePlugin
 from utils import settings
 from utils.logger import logger
-from utils.i18n import get_text
 
 _PLUGIN_DIR = os.path.dirname(os.path.realpath(__file__))
 
@@ -204,7 +203,7 @@ class Plugin(BasePlugin):
             order=6,
             name="Antivirus",
             status=None,
-            description=get_text("antivirus.scan_quarantine_and_protect_against"),
+            description="Scan, quarantine and protect against malware.",
             supported_systems=["Darwin", "Linux", "Windows"],
             translations={"US": "Antivirus", "ES": "Antivirus",
                           "FR": "Antivirus"},
@@ -644,9 +643,11 @@ class Plugin(BasePlugin):
             return {
                 "kind": "warn", "title": "Set Up Protection",
                 "subtitle": (
-                    get_text("antivirus.signature_database_downloaded_tap_below")
+                    "Signature database downloaded. "
+                    "Tap below to enable real-time protection "
+                    "(requires administrator password)."
                 ),
-                "action": (get_text("antivirus.set_up_protection"), self._start_system_setup),
+                "action": ("Set Up Protection", self._start_system_setup),
             }
         if setup_state == "installing":
             return {
@@ -664,9 +665,9 @@ class Plugin(BasePlugin):
             except Exception:
                 reason = ""
             if reason == "user_canceled":
-                subtitle = get_text("antivirus.setup_was_cancelled_tap_retry")
+                subtitle = "Setup was cancelled. Tap Retry when ready."
             else:
-                subtitle = get_text("antivirus.system_setup_failed_tap_retry")
+                subtitle = "System setup failed. Tap Retry to try again."
             return {
                 "kind": "error", "title": "Setup Failed",
                 "subtitle": subtitle,
@@ -693,7 +694,8 @@ class Plugin(BasePlugin):
             return {
                 "kind": "warn", "title": "Protection Degraded",
                 "subtitle": (
-                    get_text("antivirus.scanning_is_available_but_real")
+                    "Scanning is available but real-time file monitoring "
+                    "is not running. Full Disk Access may be needed."
                 ),
                 "action": ("Open Settings", self._safe(clamav, "open_fda_settings")),
             }
@@ -1068,10 +1070,11 @@ class Plugin(BasePlugin):
                     from plugins.antivirus.clamav_platform_linux import (
                         activate_system_daemons,
                     )
-                    activate_system_daemons()
-                except Exception:
-                    pass
-                self.app.after(0, self._update_realtime_status)
+                    ok, msg = activate_system_daemons()
+                except Exception as e:
+                    ok, msg = False, str(e)
+                # Same as Start Protection: say why it failed (e.g. NixOS).
+                self.app.after(0, self._handle_protection_started, ok, msg)
         else:
             # Windows: Defender setup is owned by the OS; nothing to do here.
             self._update_realtime_status()
@@ -1769,7 +1772,7 @@ class Plugin(BasePlugin):
             wazuh_installed = False
         if not wazuh_installed:
             self.app.show_notification(
-                get_text("antivirus.install_the_endpoint_agent_to"),
+                "Install the endpoint agent to forward AV detections.",
                 type="info")
             self._open_endpoint()
             return

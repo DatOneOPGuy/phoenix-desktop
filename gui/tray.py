@@ -1,8 +1,8 @@
 # tray.py
 """
 Phoenix VPN System Tray Icon — standalone, no project imports.
-Authors: Merhawi and the Phoenix Team
-Copyright (c) Phoenix 2025
+Authors: Merhawi and the Resistine Team
+Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
 
@@ -14,7 +14,6 @@ import json
 import socket
 import logging
 import subprocess
-from utils.i18n import get_text
 
 try:
     import pystray
@@ -29,7 +28,7 @@ except ImportError:
 BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # project root (up from gui/)
 ASSETS_DIR  = os.path.join(BASE_DIR, "resources", "icons")
 ICON_PATH   = os.path.join(ASSETS_DIR, "icon.ico")
-APPDATA_DIR = os.path.join(os.environ.get("APPDATA", ""), "Resistine")
+APPDATA_DIR = os.path.join(os.environ.get("APPDATA", ""), "Phoenix")
 WG_DIR      = os.path.join(APPDATA_DIR, "wireguard")
 CONFIG_FILE = os.path.join(APPDATA_DIR, "vpn_config.json")
 LOG_FILE    = os.path.join(APPDATA_DIR, "tray.log")
@@ -139,7 +138,7 @@ def _send_command(command: str, tunnel: str, config_path: str = None) -> dict:
     token = _load_ipc_token()
     if not token:
         return {"status": "error", "state": "Stopped",
-                "message": get_text("vpn.wireguard.service_client.ipc_token_unavailable_vpn_service")}
+                "message": "IPC token unavailable — VPN service not installed"}
 
     payload = {
         "token":   token,
@@ -158,9 +157,9 @@ def _send_command(command: str, tunnel: str, config_path: str = None) -> dict:
         data = _recv_response(sock)
         return json.loads(data.decode("utf-8"))
     except ConnectionRefusedError:
-        return {"status": "error", "state": "Stopped", "message": get_text("gui.tray.service_not_running")}
+        return {"status": "error", "state": "Stopped", "message": "Service not running"}
     except socket.timeout:
-        return {"status": "error", "state": "Stopped", "message": get_text("gui.tray.service_timed_out")}
+        return {"status": "error", "state": "Stopped", "message": "Service timed out"}
     except Exception as e:
         logger.error(f"IPC error: {e}")
         return {"status": "error", "state": "Stopped", "message": str(e)}
@@ -275,7 +274,7 @@ class ResistineTray:
                 self._icon.update_menu()
                 if changed:
                     self._icon.icon = _build_icon(new_state)
-                    logger.warning(get_text("gui.tray.vpn_state_changed_new_state", new_state=new_state))
+                    logger.warning(f"VPN state changed: {new_state}")
 
         except Exception as e:
             logger.error(f"Status poll failed: {e}")
@@ -329,7 +328,7 @@ class ResistineTray:
         self._refresh_status()
 
     def on_open_app(self, icon, item):
-        """Open the main Resistine window — focus existing instance or launch new."""
+        """Open the main Phoenix window — focus existing instance or launch new."""
         # Check if main.py is already running by looking for its process
         try:
             import ctypes
@@ -364,24 +363,21 @@ class ResistineTray:
         is_connected  = state == "connected"
         is_connecting = state == "connecting"
 
-        status_key = {
-            "connected":    "gui.tray.connected",
-            "disconnected": "gui.tray.disconnected",
-            "connecting":   "gui.tray.connecting",
-        }.get(state, "gui.tray.unknown")
-        status_label = "● " + get_text(status_key)
+        status_label = {
+            "connected":    "● Connected",
+            "disconnected": "● Disconnected",
+            "connecting":   "● Connecting...",
+        }.get(state, "● Unknown")
 
         return pystray.Menu(
             item(status_label,     None,               enabled=False),
             pystray.Menu.SEPARATOR,
-            item(get_text("gui.tray.connect"), self.on_connect,
+            item("Connect",        self.on_connect,
                  enabled=not is_connected and not is_connecting),
-            item(get_text("gui.tray.disconnect"), self.on_disconnect,
-                 enabled=is_connected),
+            item("Disconnect",     self.on_disconnect, enabled=is_connected),
             pystray.Menu.SEPARATOR,
-            item(get_text("gui.tray.open_resistine"), self.on_open_app,
-                 default=True),
-            item(get_text("gui.tray.quit"), self.on_quit),
+            item("Open Phoenix", self.on_open_app, default=True),
+            item("Quit",           self.on_quit),
         )
 
     # ---- Run ----
@@ -409,11 +405,4 @@ class ResistineTray:
 
 
 if __name__ == "__main__":
-    # Standalone process: apply the app's persisted UI language so the
-    # tray menu matches the main app.
-    try:
-        from utils import i18n, settings
-        i18n.set_language(settings.get("ui", "language", i18n.DEFAULT_LANGUAGE))
-    except Exception:
-        pass
     ResistineTray().run()

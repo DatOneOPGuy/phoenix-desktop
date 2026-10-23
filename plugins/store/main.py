@@ -36,7 +36,6 @@ from gui import theme
 from gui.page_kit import Page, PageHeader, RowList
 from gui.qt_widgets import set_pill
 from plugins.base_plugin import BasePlugin
-from utils.i18n import get_text
 
 _DIR = os.path.dirname(os.path.realpath(__file__))
 
@@ -134,7 +133,7 @@ class Plugin(BasePlugin):
             order=1000,
             name="Store",
             status=None,
-            description=get_text("store.this_plugin_allows_you_to"),
+            description="This plugin allows you to download and install new plugins.",
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Store", "ES": "Tienda", "FR": "Magasin"},
             icon_light_path=os.path.join(_DIR, "store_light.png"),

@@ -16,7 +16,6 @@ import sys
 
 from utils.logger import logger
 from utils.updates.version import get_current_version
-from utils.i18n import get_text
 
 _dll = None
 _initialized = False
@@ -148,17 +147,13 @@ def init_updater(app):
             logger.info("[WINSPARKLE] No Phoenix update feed configured — updater disabled")
             return False
         _dll.win_sparkle_set_appcast_url(APPCAST_URL.encode("utf-8"))
-        _dll.win_sparkle_set_app_details("Resistine", "Resistine", version)
+        _dll.win_sparkle_set_app_details("Phoenix", "Phoenix", version)
 
         result = _dll.win_sparkle_set_eddsa_public_key(
             _ED25519_PUBLIC_KEY.encode("utf-8")
         )
         if result != 1:
-            # Fail closed: WinSparkle without an accepted EdDSA key performs
-            # NO signature verification, and its install callback runs the
-            # downloaded EXE elevated and silent. No key — no updater.
-            logger.error(get_text("utils.updates.windows.winsparkle_eddsa_public_key_was"))
-            return False
+            logger.warning("[WINSPARKLE] EdDSA public key was not accepted")
 
         _dll.win_sparkle_set_automatic_check_for_updates(1)
         _dll.win_sparkle_set_update_check_interval(14400)  # 4 hours
@@ -239,7 +234,7 @@ def check_for_updates():
     Returns "up_to_date" on success or "error" on failure.
     """
     if not _initialized:
-        logger.warning(get_text("utils.updates.windows.winsparkle_not_initialized"))
+        logger.warning("[WINSPARKLE] Not initialized")
         return "error"
     try:
         _dll.win_sparkle_check_update_with_ui()

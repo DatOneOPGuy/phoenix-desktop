@@ -28,7 +28,6 @@ import threading
 import webbrowser
 
 from utils.logger import logger
-from utils.i18n import get_text
 
 _PLATFORM = platform.system()
 
@@ -73,11 +72,15 @@ class SetupStep:
     def _run_bg(self, fn):
         """Run fn() on a daemon thread, capturing exceptions to _failed."""
         def _worker():
+            from utils import http_trace
+            http_trace.event(f"setup step '{self.key}' ({type(self).__name__}) begins")
             try:
                 fn()
             except Exception as e:  # noqa: BLE001 — surface, never crash the UI
                 logger.error(f"[SETUP] Step '{self.key}' failed: {e}")
                 self._failed = "Something went wrong. You can try again or skip."
+            http_trace.event(f"setup step '{self.key}' work finished",
+                             {"failed": self._failed, "activated": self._activated})
         threading.Thread(target=_worker, daemon=True).start()
 
 
@@ -93,7 +96,7 @@ def _vpn_config():
         return (_config_manager.get_active_config_name(),
                 _config_manager.get_active_config_path())
     except Exception as e:  # noqa: BLE001
-        logger.warning(get_text("login.setup_steps.vpn_setup_config_lookup_failed", e=e))
+        logger.warning(f"[VPN-SETUP] config lookup failed: {e}")
         return None, None
 
 
@@ -109,7 +112,7 @@ def _vpn_status(name):
         from plugins.vpn.wireguard.vpn_functions_darwin import check_service_status
         return check_service_status(name)
     except Exception as e:  # noqa: BLE001
-        logger.warning(get_text("login.setup_steps.vpn_setup_status_check_failed", e=e))
+        logger.warning(f"[VPN-SETUP] status check failed: {e}")
         return "Stopped"
 
 
@@ -138,7 +141,7 @@ def _vpn_mark_connected(name):
             vpnmain.active_client_name = name
         logger.info("[VPN-SETUP] synced plugin toggle state -> Running")
     except Exception as e:  # noqa: BLE001
-        logger.warning(get_text("login.setup_steps.vpn_setup_could_not_sync", e=e))
+        logger.warning(f"[VPN-SETUP] could not sync plugin toggle state: {e}")
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -182,10 +185,14 @@ class _VPNStepBase(SetupStep):
                 return  # _failed already set
             name, path = _vpn_config()
             if not path:
-                self._failed = ("No VPN configuration found. Sign in again, then "
-                                "retry.")
-                logger.error("[VPN-SETUP] no active config to connect")
-                return
+                # Phoenix sign-in: get this device's config from the API.
+                from plugins.vpn import provisioning
+                try:
+                    name, path = provisioning.ensure_vpn_config(on_status)
+                except provisioning.ProvisioningError as e:
+                    self._failed = str(e)
+                    logger.error(f"[VPN-SETUP] provisioning failed: {e}")
+                    return
             if _vpn_status(name) == "Running":
                 logger.info("[VPN-SETUP] tunnel already up")
                 self._activated = True
@@ -213,15 +220,15 @@ class _VPNStepBase(SetupStep):
 
 
 class _VPNStepMac(_VPNStepBase):
-    title = get_text("login.setup_steps.enable_connect_vpn")
-    subtitle = get_text("login.setup_steps.secure_your_connection_with_a")
+    title = "Enable & Connect VPN"
+    subtitle = "Secure your connection with a private tunnel"
     detail = (
         "Phoenix installs a system network extension, then connects you to a "
         "secure VPN. Approving the extension is a one-time step in System "
         "Settings."
     )
-    primary_label = get_text("login.vpn_onboarding.enable_vpn")
-    working_label = get_text("login.setup_steps.setting_up_vpn")
+    primary_label = "Enable VPN"
+    working_label = "Setting up VPN…"
 
     def __init__(self, app):
         super().__init__(app)
@@ -250,7 +257,7 @@ class _VPNStepMac(_VPNStepBase):
         try:
             sent = VPNHelper.activate_extension()
         except Exception as e:  # noqa: BLE001
-            logger.warning(get_text("login.setup_steps.vpn_setup_activate_extension_failed", e=e))
+            logger.warning(f"[VPN-SETUP] activate_extension failed: {e}")
             sent = False
         if not sent:
             self._failed = "Couldn't ask macOS to enable the VPN extension. You can try again or skip."
@@ -272,7 +279,7 @@ class _VPNStepMac(_VPNStepBase):
                 return True
             time.sleep(0.5)
         self._open_settings()
-        on_status("Approve the Phoenix VPN extension in System Settings — this "
+        on_status("Approve the Phoenix extension in System Settings — this "
                   "continues automatically once enabled.")
         deadline = time.time() + 300
         while time.time() < deadline:
@@ -309,13 +316,13 @@ class _VPNStepMac(_VPNStepBase):
         return [
             "A macOS dialog appears — click “Open System Settings”.",
             where,
-            "Enable the Phoenix VPN extension and click Allow.",
+            "Enable the Phoenix extension and click Allow.",
         ]
 
 
 class _VPNStepWindows(_VPNStepBase):
-    title = get_text("login.setup_steps.set_up_connect_vpn")
-    subtitle = get_text("login.setup_steps.install_wireguard_to_secure_your")
+    title = "Set Up & Connect VPN"
+    subtitle = "Install WireGuard to secure your connection"
     detail = (
         "Phoenix's VPN is powered by WireGuard. Install it once and Phoenix "
         "connects and manages the secure tunnel for you."
@@ -325,8 +332,8 @@ class _VPNStepWindows(_VPNStepBase):
         "Run the WireGuard installer and accept the prompts.",
         "This step continues and connects automatically once installed.",
     ]
-    primary_label = get_text("login.setup_steps.download_wireguard")
-    working_label = get_text("login.setup_steps.setting_up_vpn")
+    primary_label = "Download WireGuard"
+    working_label = "Setting up VPN…"
 
     def _perm_ready(self) -> bool:
         from plugins.vpn.wireguard.vpn_functions_windows import check_wireguard_installed
@@ -341,6 +348,8 @@ class _VPNStepWindows(_VPNStepBase):
         import time
         deadline = time.time() + 300
         while time.time() < deadline:
+            if self.cancelled():
+                return False
             if check_wireguard_installed():
                 return True
             time.sleep(3)
@@ -349,14 +358,14 @@ class _VPNStepWindows(_VPNStepBase):
 
 
 class _VPNStepLinux(_VPNStepBase):
-    title = get_text("login.setup_steps.set_up_connect_vpn")
-    subtitle = get_text("login.setup_steps.install_wireguard_to_secure_your")
+    title = "Set Up & Connect VPN"
+    subtitle = "Install WireGuard to secure your connection"
     detail = (
         "Phoenix's VPN is powered by WireGuard. We'll install the tools and "
         "connect you — you may be asked for your password."
     )
-    primary_label = get_text("login.setup_steps.set_up_vpn")
-    working_label = get_text("login.setup_steps.setting_up_vpn")
+    primary_label = "Set Up VPN"
+    working_label = "Setting up VPN…"
 
     def _perm_ready(self) -> bool:
         from plugins.vpn.wireguard.vpn_functions_linux import check_wireguard_installed
@@ -384,8 +393,8 @@ class _VPNStepLinux(_VPNStepBase):
 class _AntivirusStepMac(SetupStep):
     key = "antivirus"
     icon = "🛡️"
-    title = get_text("login.setup_steps.turn_on_antivirus")
-    subtitle = get_text("login.setup_steps.real_time_malware_scanning_with")
+    title = "Turn On Antivirus"
+    subtitle = "Real-time malware scanning with ClamAV"
     detail = (
         "Phoenix downloads virus definitions and installs the ClamAV scanning "
         "service. You'll be asked once for your administrator password, then to "
@@ -398,8 +407,8 @@ class _AntivirusStepMac(SetupStep):
         "Then grant Phoenix Full Disk Access when prompted — protection turns "
         "on automatically.",
     ]
-    primary_label = get_text("login.setup_steps.enable_antivirus")
-    working_label = get_text("login.setup_steps.setting_up_antivirus")
+    primary_label = "Enable Antivirus"
+    working_label = "Setting up antivirus…"
 
     def is_complete(self) -> bool:
         # STATE_COMPLETED means the admin install ran — but on macOS 13+ the
@@ -469,7 +478,7 @@ class _AntivirusStepMac(SetupStep):
 
         def _work():
             # Self-heal stale state from a previous install. Settings live in
-            # ~/Library/Application Support/Resistine and SURVIVE an app
+            # ~/Library/Application Support/Phoenix and SURVIVE an app
             # uninstall, so a dev uninstall/reinstall can leave
             # setup_state="completed" while the system files and — critically —
             # the SMAppService "Login Items & Extensions" registration are gone.
@@ -479,7 +488,7 @@ class _AntivirusStepMac(SetupStep):
             try:
                 av.check_and_advance()
             except Exception as e:  # noqa: BLE001
-                logger.warning(get_text("login.setup_steps.av_setup_check_and_advance", e=e))
+                logger.warning(f"[AV-SETUP] check_and_advance: {e}")
             state = av.get_setup_state()
             logger.info(f"[AV-SETUP] post-heal state={state} "
                         f"runtime={self._safe_runtime()}")
@@ -537,7 +546,7 @@ class _AntivirusStepMac(SetupStep):
                         if step and step != last_step:
                             logger.info(f"[AV-SETUP] install step -> {step}")
                             last_step = step
-                            on_status(_STEPS.get(step, get_text("login.setup_steps.setting_up_antivirus")))
+                            on_status(_STEPS.get(step, "Setting up antivirus…"))
                         if result.get("finished"):
                             logger.info(f"[AV-SETUP] install finished: {result}")
                             if result.get("success"):
@@ -548,7 +557,7 @@ class _AntivirusStepMac(SetupStep):
                                 # don't hard-fail if that's the real blocker.
                                 rt = self._safe_runtime()
                                 logger.warning(
-                                    get_text("login.setup_steps.av_setup_install_poll_not", rt=rt))
+                                    f"[AV-SETUP] install poll not success; runtime={rt}")
                                 if rt != av.RUNTIME_APPROVAL_REQUIRED:
                                     self._failed = self._fail_msg("Antivirus setup didn't finish.")
                                     return
@@ -656,14 +665,14 @@ class _AntivirusStepDefender(SetupStep):
 
     key = "antivirus"
     icon = "🛡️"
-    title = get_text("login.setup_steps.turn_on_antivirus")
-    subtitle = get_text("login.setup_steps.enable_real_time_malware_protection")
+    title = "Turn On Antivirus"
+    subtitle = "Enable real-time malware protection"
     detail = (
         "Phoenix turns on real-time antivirus protection. You may be asked to "
         "approve an administrator prompt."
     )
-    primary_label = get_text("login.setup_steps.enable_antivirus")
-    working_label = get_text("login.setup_steps.turning_on_protection")
+    primary_label = "Enable Antivirus"
+    working_label = "Turning on protection…"
 
     def __init__(self, app):
         super().__init__(app)
@@ -773,7 +782,7 @@ def _wazuh_reenroll(on_status) -> bool:
     import time
     m = _wazuh_mod()
     if not (m and hasattr(m, "reenroll_agent")):
-        logger.warning(get_text("login.setup_steps.ep_setup_reenroll_agent_unavailable"))
+        logger.warning("[EP-SETUP] reenroll_agent unavailable on this platform")
         return False
     on_status("Reconnecting to the monitoring server…")
     logger.info("[EP-SETUP] reenroll_agent()")
@@ -794,40 +803,66 @@ def _wazuh_reenroll(on_status) -> bool:
     return _wazuh_running()
 
 
+def _enrolled_for_sign_in() -> bool:
+    """Was the agent enrolled for the Matrix device signed in now? After a
+    sign-out the server has deleted the old agent, while the local one may
+    still be installed and running (with a key the manager no longer has)."""
+    try:
+        from plugins.wazuh.agent import enrollment
+        return enrollment.enrolled_for_this_sign_in()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[EP-SETUP] enrollment record unreadable: {e}")
+        return True
+
+
+def _mark_enrolled() -> None:
+    """Record the enrollment for this sign-in. Already done by a successful
+    API enrollment; this covers the agent-auth fallback."""
+    try:
+        from plugins.wazuh.agent import enrollment
+        if not enrollment.enrolled_for_this_sign_in():
+            enrollment.mark_enrolled()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[EP-SETUP] could not record the enrollment: {e}")
+
+
 # Human-readable messages for Wazuh installer failure reasons. Mirrors the
 # mapping the Endpoint plugin's own UI uses (plugins/wazuh/main.py) so the
 # wizard explains failures the same clear way instead of "didn't finish".
-_WZ_REASON_KEYS = {
-    "user_canceled": "login.setup_steps.reason_user_canceled",
-    "script_failed": "login.setup_steps.reason_script_failed",
-    "pkg_corrupted": "login.setup_steps.reason_pkg_corrupted",
-    "no_status_file": "login.setup_steps.reason_no_status_file",
-    "dns_failed": "login.setup_steps.reason_dns_failed",
-    "network_timeout": "login.setup_steps.reason_network_timeout",
-    "signature_invalid": "login.setup_steps.reason_signature_invalid",
-    "duplicate_name": "login.setup_steps.reason_duplicate_name",
-    "manager_unreachable": "login.setup_steps.reason_manager_unreachable",
-    "enroll_failed": "login.setup_steps.enrollment_with_the_monitoring",
+_WZ_REASON_MSG = {
+    "user_canceled": "The install was cancelled.",
+    "script_failed": "The installer hit an error. You can try again or skip.",
+    "pkg_corrupted": "The downloaded package was corrupted. Try again to re-download.",
+    "no_status_file": "The install was interrupted. Try again.",
+    "dns_failed": "Couldn't reach the download server. Check your connection and try again.",
+    "network_timeout": "The download timed out. Check your connection and try again.",
+    "signature_invalid": "The package failed signature verification. Try again to re-download.",
+    "duplicate_name": (
+        "This device is already registered on the monitoring server. "
+        "Try again to enroll under a new identifier."
+    ),
+    "manager_unreachable": (
+        "Couldn't reach the monitoring server. Check your internet connection "
+        "and try again."
+    ),
+    "enroll_failed": (
+        "Enrollment with the monitoring server failed. Check your internet "
+        "connection and try again."
+    ),
 }
 
 
 def _wazuh_reason_message(reason) -> str:
-    """Turn a Wazuh installer failure_reason into a clear, actionable message.
-
-    Resolved lazily via get_text so the active language at display time
-    applies (a module-level message dict would freeze the import-time
-    language).
-    """
-    from utils.i18n import get_text
-
+    """Turn a Wazuh installer failure_reason into a clear, actionable message."""
     if reason and reason.startswith("enroll_rc_"):
         rc = reason[len("enroll_rc_"):]
-        return get_text("login.setup_steps.reason_enroll_rc", rc=rc)
-    if reason in _WZ_REASON_KEYS:
-        return get_text(_WZ_REASON_KEYS[reason])
+        return (f"Enrollment with the monitoring server failed (code {rc}). "
+                "Check your internet connection and try again.")
+    if reason in _WZ_REASON_MSG:
+        return _WZ_REASON_MSG[reason]
     if reason:
-        return get_text("login.setup_steps.reason_didnt_finish", reason=reason)
-    return get_text("login.setup_steps.reason_didnt_finish_generic")
+        return f"Endpoint setup didn't finish ({reason}). You can try again or skip."
+    return "Endpoint setup didn't finish. You can try again or skip."
 
 
 def _maybe_forward_clamav(on_status):
@@ -837,7 +872,7 @@ def _maybe_forward_clamav(on_status):
         from plugins.wazuh.agent.log_forwarding import ensure_clamav_log_forwarding
         ensure_clamav_log_forwarding(on_status)
     except Exception as e:  # noqa: BLE001
-        logger.warning(get_text("login.setup_steps.ep_setup_clamav_forwarding_skipped", e=e))
+        logger.warning(f"[EP-SETUP] ClamAV forwarding skipped: {e}")
 
 
 def _wazuh_activate(on_status, cancelled=None):
@@ -857,15 +892,15 @@ def _wazuh_activate(on_status, cancelled=None):
             logger.info("[EP-SETUP] agent running")
             return True
         time.sleep(2)
-    logger.warning(get_text("login.setup_steps.ep_setup_agent_did_not"))
+    logger.warning("[EP-SETUP] agent did not reach Running state")
     return False
 
 
 class _EndpointStepMac(SetupStep):
     key = "endpoint"
     icon = "📡"
-    title = get_text("login.setup_steps.install_endpoint_monitoring")
-    subtitle = get_text("login.setup_steps.detect_threats_with_the_siem")
+    title = "Install Endpoint Monitoring"
+    subtitle = "Detect threats with the SIEM agent"
     detail = (
         "The Phoenix endpoint agent watches your device for suspicious "
         "activity and reports it securely. You'll be asked once for your "
@@ -876,8 +911,8 @@ class _EndpointStepMac(SetupStep):
         "Enter your administrator password when macOS asks.",
         "The agent installs and enrolls automatically.",
     ]
-    primary_label = get_text("login.setup_steps.install_endpoint_agent")
-    working_label = get_text("login.setup_steps.installing_endpoint_agent")
+    primary_label = "Install Endpoint Agent"
+    working_label = "Installing endpoint agent…"
 
     def is_complete(self) -> bool:
         # Installed AND running AND not a confirmed disconnect. "disconnected"
@@ -886,7 +921,8 @@ class _EndpointStepMac(SetupStep):
         # pending/unknown are treated as OK so the step never hangs on a slow or
         # unreadable state file.
         return (_wazuh_installed() and _wazuh_running()
-                and _wazuh_connection() != "disconnected")
+                and _wazuh_connection() != "disconnected"
+                and _enrolled_for_sign_in())
 
     def check_failed(self):
         if self._failed:
@@ -996,7 +1032,7 @@ class _EndpointStepMac(SetupStep):
                 if not _wazuh_reenroll(on_status):
                     self._failed = (
                         "Couldn't enroll the endpoint agent with the monitoring "
-                        "server. Make sure the VPN is connected, then try again.")
+                        "server. Check your internet connection and try again.")
                     return
             else:
                 if not _wazuh_activate(on_status, self.cancelled):
@@ -1012,6 +1048,16 @@ class _EndpointStepMac(SetupStep):
                     # dead-key). Recover by re-enrolling under a fresh identity.
                     logger.info("[EP-SETUP] running but disconnected — re-enrolling")
                     _wazuh_reenroll(on_status)
+                elif not _enrolled_for_sign_in():
+                    # Running, but enrolled for an earlier sign-in, whose agent
+                    # the server deleted at sign-out.
+                    logger.info("[EP-SETUP] enrolled for an earlier sign-in — re-enrolling")
+                    if not _wazuh_reenroll(on_status):
+                        self._failed = (
+                            "Couldn't enroll the endpoint agent with the monitoring "
+                            "server. Check your internet connection and try again.")
+                        return
+            _mark_enrolled()
 
             # Phase 5: link ClamAV → Wazuh if antivirus is also set up.
             _maybe_forward_clamav(on_status)
@@ -1024,21 +1070,28 @@ class _EndpointStepDirect(SetupStep):
 
     key = "endpoint"
     icon = "📡"
-    title = get_text("login.setup_steps.install_endpoint_monitoring")
-    subtitle = get_text("login.setup_steps.detect_threats_with_the_siem")
+    title = "Install Endpoint Monitoring"
+    subtitle = "Detect threats with the SIEM agent"
     detail = (
         "The Phoenix endpoint agent watches your device for suspicious "
         "activity and reports it securely. You may be asked to approve an "
         "administrator prompt."
     )
-    primary_label = get_text("login.setup_steps.install_endpoint_agent")
-    working_label = get_text("login.setup_steps.installing_endpoint_agent")
+    primary_label = "Install Endpoint Agent"
+    working_label = "Installing endpoint agent…"
+    _working = False  # begin()'s worker is still installing/enrolling
 
     def is_complete(self) -> bool:
         # Installed AND running AND not a confirmed disconnect (dead key) — see
-        # _EndpointStepMac.is_complete for the reasoning.
+        # _EndpointStepMac.is_complete for the reasoning. Never while the
+        # worker runs: the package's postinst starts the service before the
+        # root script has written the enrollment key and restarted it, so
+        # "installed + running" turns true mid-install.
+        if self._working:
+            return False
         return (_wazuh_installed() and _wazuh_running()
-                and _wazuh_connection() != "disconnected")
+                and _wazuh_connection() != "disconnected"
+                and _enrolled_for_sign_in())
 
     def begin(self, on_status):
         # Windows/Linux full_install() returns only a bool, so classify the
@@ -1051,6 +1104,12 @@ class _EndpointStepDirect(SetupStep):
             on_status(str(msg))
 
         def _work():
+            try:
+                _install()
+            finally:
+                self._working = False
+
+        def _install():
             if not _wazuh_installed():
                 if _PLATFORM == "Linux":
                     from plugins.wazuh.agent.wazuh_functions_linux import full_install
@@ -1075,8 +1134,8 @@ class _EndpointStepDirect(SetupStep):
                 if not _wazuh_reenroll(_status):
                     self._failed = (
                         "The endpoint agent installed but couldn't reach the "
-                        "monitoring server to finish enrolling. Make sure the VPN "
-                        "is connected, then try again."
+                        "monitoring server to finish enrolling. Check your internet "
+                        "connection and try again."
                     )
                     return
             elif _wazuh_connection() == "disconnected":
@@ -1084,8 +1143,21 @@ class _EndpointStepDirect(SetupStep):
                 # re-enroll under a fresh identity to recover.
                 logger.info("[EP-SETUP] running but disconnected — re-enrolling")
                 _wazuh_reenroll(_status)
+            elif not _enrolled_for_sign_in():
+                # Running, but enrolled for an earlier sign-in, whose agent the
+                # server deleted at sign-out.
+                logger.info("[EP-SETUP] enrolled for an earlier sign-in — re-enrolling")
+                if not _wazuh_reenroll(_status):
+                    self._failed = (
+                        "Couldn't enroll the endpoint agent with the monitoring "
+                        "server. Check your internet connection and try again."
+                    )
+                    return
+            _mark_enrolled()
             # Link ClamAV → Wazuh if antivirus is also set up.
             _maybe_forward_clamav(_status)
+
+        self._working = True
         self._run_bg(_work)
 
     def _install_fail_message(self) -> str:

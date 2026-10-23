@@ -74,22 +74,26 @@ class StatusBadge(QLabel):
         # layout the badge becomes visible with its parent anyway.
         if self.parent() is not None:
             self.show()
-        # Display text is localized via a status.<slug> catalog key when one
-        # exists; the raw status string stays the styling key below, so
-        # internal state comparisons and QSS selectors are unaffected.
-        slug = str(status).strip().lower().replace(" ", "_")
-        try:
-            from utils.i18n import get_text
-
-            label = get_text(f"status.{slug}")
-        except Exception:
-            label = str(status).title()
-        self.setText(label)
+        self.setText(str(status).title())
         self.setProperty("badge", str(status).lower())
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         self.style().unpolish(self)
         self.style().polish(self)
+
+
+def set_pill(label: QLabel, status: str, text: str) -> None:
+    """Style ``label`` as a status pill (ok/info/warning/error) showing
+    ``text``. Colours are set inline rather than via the ``badge`` property,
+    so a live label can change state without a re-polish."""
+    bg, fg = theme.badge_colors(status)
+    label.setText(text)
+    label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+    label.setStyleSheet(
+        f"background-color: {bg}; color: {fg}; border-radius: 9px; "
+        f"padding: 3px 10px; font-weight: 600; font-size: 12px;")
+    label.adjustSize()
 
 
 class Card(QFrame):

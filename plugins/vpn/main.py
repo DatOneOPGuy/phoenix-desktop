@@ -265,7 +265,7 @@ def initialize_vpn_status():
             else:
                 my_vpn_status = "Stopped"
         except Exception as e:
-            logger.warning(get_text("vpn.could_not_determine_vpn_status", e=e))
+            logger.warning(f"⚠️ Could not determine VPN status on Windows: {e}")
             my_vpn_status = "Stopped"
 
     elif IS_LINUX:
@@ -371,7 +371,7 @@ class Plugin(BasePlugin):
             if vpn_helper is not None:
                 vpn_helper.activate_extension()
         except Exception as e:
-            logger.warning(get_text("vpn.extension_activation_request_failed_e", e=e))
+            logger.warning(f"Extension activation request failed: {e}")
 
     def check_status(self):
         """Dynamic check of the VPN status from cheap cached state."""
@@ -453,8 +453,8 @@ class Plugin(BasePlugin):
 
             valid, reason = self.validate_wireguard_config(content)
             if not valid:
-                logger.warning(get_text("vpn.invalid_config_rejected_reason", reason=reason))
-                self.app.show_notification(get_text("vpn.invalid_config_reason", reason=reason), type="error")
+                logger.warning(f"Invalid config rejected: {reason}")
+                self.app.show_notification(f"Invalid config: {reason}", type="error")
                 return
 
             # Stop VPN if running before switching to imported config
@@ -479,8 +479,8 @@ class Plugin(BasePlugin):
             self.update_plugin(self.id)
 
         except Exception as e:
-            logger.error(get_text("vpn.failed_to_import_config_e", e=e))
-            self.app.show_notification(get_text("vpn.failed_to_import_config_e", e=e), type="error")
+            logger.error(f"Failed to import config: {e}")
+            self.app.show_notification(f"Failed to import config: {e}", type="error")
 
     def get_selected_conf_file_name(self):
         """Get the active VPN config name from the config manager."""
@@ -709,7 +709,7 @@ class Plugin(BasePlugin):
             page.add(MenuRow(
                 "file-text", "View config", f"{selected_conf_file}.conf",
                 lambda: self._show_config_view(selected_conf_file)))
-            if len(configs) > 1 and not self.config_manager.is_resistine_config(
+            if len(configs) > 1 and not self.config_manager.is_default_config(
                 selected_conf_file
             ):
                 page.add(MenuRow(
@@ -1029,7 +1029,7 @@ class Plugin(BasePlugin):
             active_client_name = None
 
         self.config_manager.set_active_config(new_config_name)
-        self.app.show_notification(get_text("vpn.switched_to_display_name", display_name=display_name), type="info")
+        self.app.show_notification(f"Switched to {display_name}", type="info")
         self.update_plugin(self.id)
 
     def _delete_config(self, config_name):
@@ -1043,9 +1043,9 @@ class Plugin(BasePlugin):
 
         success, message = self.config_manager.delete_config(config_name)
         if success:
-            self.app.show_notification(get_text("vpn.configuration_deleted"), type="info")
+            self.app.show_notification("Configuration deleted", type="info")
         else:
-            self.app.show_notification(get_text("vpn.failed_to_delete_message", message=message), type="error")
+            self.app.show_notification(f"Failed to delete: {message}", type="error")
 
         self.update_plugin(self.id)
 
@@ -1079,7 +1079,7 @@ class Plugin(BasePlugin):
             self.app.show_notification("Invalid configuration name", type="error")
             return
         if not os.path.exists(conf_file_path):
-            self.app.show_notification(get_text("vpn.config_file_not_found"), type="error")
+            self.app.show_notification("Config file not found", type="error")
             return
         with open(conf_file_path, "r", encoding="utf-8") as f:
             content = f.read()

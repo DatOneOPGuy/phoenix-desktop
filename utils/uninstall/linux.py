@@ -1,7 +1,7 @@
 """
 Linux Uninstaller Backend.
 
-Removes Resistine's runtime footprint on Linux.  Every privileged operation
+Removes Phoenix's runtime footprint on Linux.  Every privileged operation
 (VPN teardown, Wazuh agent removal, ClamAV deactivation) is collected into a
 SINGLE shell script and run through ONE privilege-escalation prompt, mirroring
 the macOS uninstaller.  Earlier revisions escalated once per component, which
@@ -12,7 +12,7 @@ Phases:
      (guarded so an un-configured component contributes nothing).
   2. Run them all in one pkexec/sudo prompt.
   3. Non-privileged cleanup (no prompt): keyring master key + config dir
-     (~/.config/resistine — settings, secrets, VPN keys, Wazuh key backup).
+     (~/.config/phoenix, and the pre-rebrand ~/.config/resistine — settings, secrets, VPN keys, Wazuh key backup).
 
 Running from source (run.sh) there is no installed binary or .desktop entry to
 remove.  A packaged build should extend phase 1/3 with artifact removal.
@@ -89,7 +89,7 @@ def run_uninstall(app, progress_callback=None):
 
     if errors:
         return (False, f"Completed with errors: {'; '.join(errors)}")
-    return (True, "Resistine has been uninstalled successfully.")
+    return (True, "Phoenix has been uninstalled successfully.")
 
 
 class _UserCancelled(Exception):
@@ -196,22 +196,31 @@ def _remove_keyring_master_key():
         logger.info("[UNINSTALL-LINUX] keyring not available, skipping")
         return
 
-    from utils.settings import MASTER_KEY_SERVICE, MASTER_KEY_USERNAME
+    from utils.settings import (LEGACY_MASTER_KEY_SERVICE, MASTER_KEY_SERVICE,
+                                MASTER_KEY_USERNAME)
 
-    try:
-        keyring.delete_password(MASTER_KEY_SERVICE, MASTER_KEY_USERNAME)
-        logger.info("[UNINSTALL-LINUX] Removed keyring master key")
-    except keyring.errors.PasswordDeleteError:
-        logger.info("[UNINSTALL-LINUX] Keyring master key not found")
+    from utils.encryption import KEYRING_SERVICE, LEGACY_KEYRING_SERVICE
+
+    entries = [(service, MASTER_KEY_USERNAME)
+               for service in (MASTER_KEY_SERVICE, LEGACY_MASTER_KEY_SERVICE)]
+    entries += [(service, name)
+                for service in (KEYRING_SERVICE, LEGACY_KEYRING_SERVICE)
+                for name in ("encryption_key", "encrypted_data")]
+    for service, username in entries:
+        try:
+            keyring.delete_password(service, username)
+            logger.info(f"[UNINSTALL-LINUX] Removed keyring entry {service}/{username}")
+        except keyring.errors.PasswordDeleteError:
+            logger.info(f"[UNINSTALL-LINUX] Keyring entry {service}/{username} not found")
 
 
 def _remove_app_config():
     """Remove the user config directory (settings, secrets, VPN/Wazuh keys)."""
-    from utils.settings import get_config_dir
+    from utils.settings import get_config_dir, get_legacy_config_dir
 
-    config_dir = get_config_dir()
-    if os.path.exists(config_dir):
-        shutil.rmtree(config_dir, ignore_errors=True)
-        logger.info(f"[UNINSTALL-LINUX] Removed {config_dir}")
-    else:
-        logger.info("[UNINSTALL-LINUX] Config dir not found, skipping")
+    for config_dir in (get_config_dir(), get_legacy_config_dir()):
+        if os.path.exists(config_dir):
+            shutil.rmtree(config_dir, ignore_errors=True)
+            logger.info(f"[UNINSTALL-LINUX] Removed {config_dir}")
+        else:
+            logger.info(f"[UNINSTALL-LINUX] Config dir {config_dir} not found, skipping")

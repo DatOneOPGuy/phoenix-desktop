@@ -56,7 +56,6 @@ from gui import theme
 from gui.qt_toast import Toast
 from gui.qt_widgets import resource
 from utils.logger import logger
-from utils.i18n import get_text
 
 
 # Nav icon geometry: the glyph is NAV_ICON px, drawn on a canvas padded by
@@ -236,7 +235,7 @@ class AppWindow(QMainWindow):
         self.current_frame_name = ""
         self._current_main_screen = None
 
-        self.setWindowTitle(get_text("main.app_title"))
+        self.setWindowTitle("Phoenix")
         self.resize(1120, 720)
         self.setMinimumSize(820, 480)
         icon_png = resource("resources", "icons", "app_icon.png")
@@ -372,10 +371,8 @@ class AppWindow(QMainWindow):
             size = NAV_ICON + 2 * NAV_GLOW_PAD
             btn.setIconSize(QSize(size, size))
             btn.setIcon(self._nav_icon(p))
-            btn.setAccessibleName(p.get_display_name())
-            # Hover rail shows the (localized) name as a slide-out label, so
-            # no tooltip needed.
-            self.sidebar.add_label(btn, p.get_display_name())
+            btn.setAccessibleName(p.get_name())
+            self.sidebar.add_label(btn, p.get_name())
             btn.clicked.connect(
                 lambda _=False, n=p.get_name(): self.select_frame_by_name(
                     f"frame_{n}"))

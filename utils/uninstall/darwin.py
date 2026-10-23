@@ -32,7 +32,6 @@ import uuid
 import sys
 
 from utils.logger import logger
-from utils.i18n import get_text
 
 _EXTENSION_BUNDLE_ID = "com.resistine.desktop.network-extension"
 
@@ -135,7 +134,7 @@ def run_uninstall(app, progress_callback=None):
 
     if errors:
         return (False, f"Completed with errors: {'; '.join(errors)}")
-    return (True, "Resistine has been uninstalled successfully.")
+    return (True, "Phoenix has been uninstalled successfully.")
 
 
 class _UserCancelled(Exception):
@@ -305,7 +304,8 @@ def _remove_clamav_daemons(admin_cmds):
                     success, err = service.unregisterAndReturnError_(None)
                     if not success:
                         logger.warning(
-                            get_text("utils.uninstall.darwin.uninstall_smappservice_unregister_error_plist", plist_name=plist_name, err=err),
+                            f"[UNINSTALL] SMAppService unregister error "
+                            f"({plist_name}): {err}",
                         )
                     else:
                         logger.info(
@@ -313,7 +313,7 @@ def _remove_clamav_daemons(admin_cmds):
                         )
             except Exception as e:
                 logger.warning(
-                    get_text("utils.uninstall.darwin.uninstall_smappservice_unregister_failed_plist", plist_name=plist_name, e=e),
+                    f"[UNINSTALL] SMAppService unregister failed ({plist_name}): {e}",
                 )
     except ImportError:
         logger.debug("[UNINSTALL] ServiceManagement not available")
@@ -385,7 +385,7 @@ def _collect_wazuh_admin_cmds(admin_cmds):
     prompts. Now we emit the same commands inline so they batch with
     the rest of the privileged cleanup. wipe_keys=True semantics
     (logout-style full identity wipe) is embedded directly: delete
-    /Library/Ossec, the launchd plist, the key backup file, and the
+    /Library/Phoenix, the launchd plist, the key backup file, and the
     System Keychain entry.
     """
     # Wazuh constants — keep in sync with plugins.wazuh.config /
@@ -408,9 +408,9 @@ def _collect_wazuh_admin_cmds(admin_cmds):
         )
     except ImportError:
         # Fallback paths matching the plugin's defaults.
-        _WAZUH_CONTROL = "/Library/Ossec/bin/wazuh-control"
+        _WAZUH_CONTROL = "/Library/Phoenix/bin/wazuh-control"
         WAZUH_LAUNCHD_PLIST = "/Library/LaunchDaemons/com.wazuh.agent.plist"
-        WAZUH_INSTALL_DIR = "/Library/Ossec"
+        WAZUH_INSTALL_DIR = "/Library/Phoenix"
         _KEY_BACKUP = "/Library/Application Support/Resistine/wazuh_client.keys"
         _KC_SERVICE = "com.resistine.wazuh.client.keys"
         _KC_ACCOUNT = "wazuh-agent"
@@ -604,7 +604,8 @@ def _deactivate_system_extension():
 
         if not done_event.wait(timeout=15):
             logger.warning(
-                get_text("utils.uninstall.darwin.uninstall_extension_deactivation_timed_out")
+                "[UNINSTALL] Extension deactivation timed out after 15s "
+                "— continuing anyway"
             )
             return
         err = _DEACTIVATION_STATE.get("error")
@@ -622,11 +623,11 @@ def _deactivate_system_extension():
                 logger.info(
                     "[UNINSTALL] Extension already deactivated, treating as success")
                 return
-            raise OSError(get_text("utils.uninstall.darwin.extension_deactivation_failed_err", err=err))
+            raise OSError(f"Extension deactivation failed: {err}")
     except OSError:
         raise
     except Exception as e:
-        raise OSError(get_text("utils.uninstall.darwin.extension_deactivation_error_e", e=e)) from e
+        raise OSError(f"Extension deactivation error: {e}") from e
 
 
 def _remove_wireguard_configs():
@@ -668,7 +669,7 @@ def _remove_wireguard_configs():
                 os.remove(entry_path)
             removed += 1
         except OSError as e:
-            logger.warning(get_text("utils.uninstall.darwin.uninstall_could_not_remove_entry", entry_path=entry_path, e=e))
+            logger.warning(f"[UNINSTALL] Could not remove {entry_path}: {e}")
             failed.append(entry_path)
 
     # Try to remove the now-empty directory (may fail due to SIP — that's OK)
@@ -692,13 +693,14 @@ def _remove_app_config(admin_cmds):
     """Remove application configuration directories (user + system level)."""
     home = os.path.expanduser("~")
 
-    # User-level config (no admin needed)
-    config_dir = os.path.join(home, "Library", "Application Support", "Resistine")
-    if os.path.exists(config_dir):
-        shutil.rmtree(config_dir)
-        logger.info(f"[UNINSTALL] Removed {config_dir}")
-    else:
-        logger.info("[UNINSTALL] User config dir not found, skipping")
+    # User-level config (no admin needed); the Resistine dir is pre-rebrand
+    for app_name in ("Phoenix", "Resistine"):
+        config_dir = os.path.join(home, "Library", "Application Support", app_name)
+        if os.path.exists(config_dir):
+            shutil.rmtree(config_dir)
+            logger.info(f"[UNINSTALL] Removed {config_dir}")
+        else:
+            logger.info(f"[UNINSTALL] User config dir {config_dir} not found, skipping")
 
     # Stale log files — the network extension wrote these as root; old entries
     # persist across builds and cause diagnostic confusion.  Must use admin
@@ -721,7 +723,7 @@ def _remove_app_config(admin_cmds):
                     logger.info(f"[UNINSTALL] Removed container {container_path}")
                 except OSError as e:
                     logger.warning(
-                        get_text("utils.uninstall.darwin.uninstall_could_not_remove_container", container_path=container_path, e=e)
+                        f"[UNINSTALL] Could not remove {container_path}: {e}"
                     )
 
     # System-level directory — batch with other admin commands
@@ -731,7 +733,7 @@ def _remove_app_config(admin_cmds):
 
 
 def _remove_keychain_items():
-    """Remove keychain entries created by Resistine."""
+    """Remove keychain entries created by Phoenix."""
     try:
         import keyring
     except ImportError:
@@ -739,7 +741,13 @@ def _remove_keychain_items():
         return
 
     entries = [
-        ("resistine-master-key", "master-key"),
+        ("phoenix-master-key", "master-key"),
+        ("resistine-master-key", "master-key"),  # pre-rebrand
+        # utils/encryption.py (and its pre-rebrand service name)
+        ("phoenix", "encryption_key"),
+        ("phoenix", "encrypted_data"),
+        ("resistine", "encryption_key"),
+        ("resistine", "encrypted_data"),
     ]
 
     failed = []
@@ -782,7 +790,7 @@ def _collect_app_bundle_admin_cmd(admin_cmds):
     app_bundle = str(Path(sys.executable).parents[2])
 
     if not app_bundle.endswith(".app"):
-        logger.warning(get_text("utils.uninstall.darwin.uninstall_unexpected_bundle_path_app", app_bundle=app_bundle))
+        logger.warning(f"[UNINSTALL] Unexpected bundle path: {app_bundle}")
         return
 
     if not os.path.exists(app_bundle):
@@ -791,6 +799,8 @@ def _collect_app_bundle_admin_cmd(admin_cmds):
 
     escaped = app_bundle.replace("'", "'\\''")
     admin_cmds.append(f"rm -rf '{escaped}'")
+    if os.path.isdir("/Applications/Resistine.app"):  # pre-rename bundle
+        admin_cmds.append("rm -rf '/Applications/Resistine.app'")
 
 
 def _find_cli_path():

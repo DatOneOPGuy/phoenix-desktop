@@ -17,6 +17,7 @@ MANAGER=""
 STATUS_FILE=""
 LOG_FILE=""
 RESTORE_KEYS="false"
+KEY_FILE=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -47,6 +48,11 @@ while [ $# -gt 0 ]; do
         --restore-keys)
             RESTORE_KEYS="true"
             shift
+            ;;
+        --key-file)
+            # client.keys line from the Phoenix API (server-side enrollment)
+            KEY_FILE="$2"
+            shift 2
             ;;
         *)
             echo "Unknown argument: $1" >&2
@@ -90,10 +96,10 @@ INSTALLER_BIN="${INSTALLER_BIN:-installer}"
 SED_BIN="${SED_BIN:-sed}"
 SECURITY_BIN="${SECURITY_BIN:-security}"
 LAUNCHCTL_BIN="${LAUNCHCTL_BIN:-launchctl}"
-AGENT_AUTH_BIN="${AGENT_AUTH_BIN:-/Library/Ossec/bin/agent-auth}"
-WAZUH_CONTROL_BIN="${WAZUH_CONTROL_BIN:-/Library/Ossec/bin/wazuh-control}"
-OSSEC_CONF_OVERRIDE="${OSSEC_CONF_OVERRIDE:-/Library/Ossec/etc/ossec.conf}"
-CLIENT_KEYS_OVERRIDE="${CLIENT_KEYS_OVERRIDE:-/Library/Ossec/etc/client.keys}"
+AGENT_AUTH_BIN="${AGENT_AUTH_BIN:-/Library/Phoenix/bin/agent-auth}"
+WAZUH_CONTROL_BIN="${WAZUH_CONTROL_BIN:-/Library/Phoenix/bin/wazuh-control}"
+OSSEC_CONF_OVERRIDE="${OSSEC_CONF_OVERRIDE:-/Library/Phoenix/etc/ossec.conf}"
+CLIENT_KEYS_OVERRIDE="${CLIENT_KEYS_OVERRIDE:-/Library/Phoenix/etc/client.keys}"
 KEY_BACKUP_OVERRIDE="${KEY_BACKUP_OVERRIDE:-/Library/Application Support/Resistine/wazuh_client.keys}"
 PLIST_OVERRIDE="${PLIST_OVERRIDE:-/Library/LaunchDaemons/com.wazuh.agent.plist}"
 
@@ -128,9 +134,9 @@ KC_SERVICE="com.resistine.wazuh.agent"
 KC_ACCOUNT="client_key"
 AGENT_AUTH_LOG="${LOG_FILE%.log}-agent-auth.log"
 
-# Always run agent-auth so the manager receives the group in the registration
-# request.  Server-side groups are auto-created on enroll; restoring a stale
-# client.keys would skip that and the agent would land in "default".
+# Never restore a stale client.keys: either the Phoenix API enrolled the agent
+# server side in the user's group (--key-file), or agent-auth registers it
+# now so the manager receives the group in the registration request.
 rm -f "$CLIENT_KEYS"
 
 # agent-auth writes its diagnostic lines to stderr on success and to stdout on
@@ -139,8 +145,26 @@ EFFECTIVE_AGENT_NAME="$AGENT_NAME"
 ENROLLMENT_RESULT="enroll_failed"
 ENROLLMENT_ERROR=""
 MAX_ENROLL_ATTEMPTS=3
+ATTEMPTS="$(seq 1 "$MAX_ENROLL_ATTEMPTS")"
 
-for attempt in $(seq 1 "$MAX_ENROLL_ATTEMPTS"); do
+if [ -n "$KEY_FILE" ]; then
+    # Same shape check as plugins/wazuh/agent/enrollment.py KEY_LINE_PATTERN:
+    # the file sits in the user's temp dir, so only a key line is accepted.
+    KEY_LINE="$(head -c 512 "$KEY_FILE" 2>/dev/null | head -n 1 || true)"
+    rm -f "$KEY_FILE"
+    if printf '%s\n' "$KEY_LINE" \
+        | grep -Eqx '[0-9]{3,8} [A-Za-z0-9._-]{1,64} (any|[0-9A-Fa-f.:/]{2,64}) [0-9a-f]{64}'; then
+        (umask 027; printf '%s\n' "$KEY_LINE" > "$CLIENT_KEYS")
+        chown root:wazuh "$CLIENT_KEYS" 2>/dev/null || true
+        chmod 640 "$CLIENT_KEYS"
+        ENROLLMENT_RESULT="enrolled"
+    else
+        ENROLLMENT_ERROR="key_invalid"
+    fi
+    ATTEMPTS=""  # no agent-auth (BSD `seq 1 0` would count down)
+fi
+
+for attempt in $ATTEMPTS; do
     set +e
     "$AGENT_AUTH_BIN" \
         -m "$MANAGER" \
@@ -257,14 +281,14 @@ if [ "$BOOTSTRAP_RC" -ne 0 ]; then
 fi
 
 # --- Make live agent state readable for the UI's connection status ---
-# wazuh-agentd.state + ossec.log are root-owned and /Library/Ossec/var/run isn't
+# wazuh-agentd.state + ossec.log are root-owned and /Library/Phoenix/var/run isn't
 # traversable by the (non-root) app, so get_agent_connection() reads "unknown".
 # Loosen the dirs + files so the UI can show connected/pending/disconnected.
 # wazuh-agentd truncate-writes the state file, so the mode persists.
 sleep 2
-chmod o+rx /Library/Ossec/var /Library/Ossec/var/run /Library/Ossec/logs 2>/dev/null || true
-chmod o+r /Library/Ossec/var/run/wazuh-agentd.state 2>/dev/null || true
-chmod o+r /Library/Ossec/logs/ossec.log 2>/dev/null || true
+chmod o+rx /Library/Phoenix/var /Library/Phoenix/var/run /Library/Phoenix/logs 2>/dev/null || true
+chmod o+r /Library/Phoenix/var/run/wazuh-agentd.state 2>/dev/null || true
+chmod o+r /Library/Phoenix/logs/ossec.log 2>/dev/null || true
 
 # --- Done ---
 write_status "{\"status\":\"success\",\"step\":\"done\",\"enrollment\":\"${ENROLLMENT_RESULT}\",\"agent_name\":\"${AGENT_NAME}\"}"

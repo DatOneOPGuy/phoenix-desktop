@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Phoenix Desktop is a cross-platform (macOS/Linux/Windows) security desktop app built with Python and **PyQt6**. It provides VPN (WireGuard), antivirus (ClamAV), SIEM (Wazuh), endpoint management, and AI chat through a modular plugin system.
+Phoenix Desktop is a cross-platform (macOS/Linux/Windows) security desktop app built with Python and PyQt6. It was renamed from Resistine; bundle IDs, service names and system paths still carry the old name. It provides VPN (WireGuard), antivirus (ClamAV), SIEM (Wazuh), endpoint management, and AI chat through a modular plugin system.
 
 ## Commands
 
@@ -61,13 +61,11 @@ Configured linters: ruff, black, isort, bandit, shellcheck, shfmt, markdownlint,
 ./scripts/build/build-windows-vm.sh     # Phoenix-Setup-<version>.exe into dist/installers/
 ```
 
-Runs `scripts/build/build-windows-installer.ps1` (PyInstaller + Inno Setup) over SSH in a throwaway copy of a golden Windows image (dockur/windows, needs docker and /dev/kvm). The installer must stay silent-safe: automated upgrades run it with `/VERYSILENT /SUPPRESSMSGBOXES`, so use `SuppressibleMsgBox`, never `MsgBox`.
+Runs `scripts/build/build-windows-installer.ps1` (PyInstaller + Inno Setup) over SSH in a throwaway copy of the golden Windows image from `Resistine-Server-install/scripts/windows/make_golden.sh` (dockur/windows, needs docker and /dev/kvm). Set `GOLDEN_DIR` if the image is not in `/var/lib/phoenix-win/golden`, and `BUILD_DIR` off tmpfs (the VM disk copy is sparse, up to 64 GB). The installer must stay silent-safe: WinSparkle upgrades run it with `/VERYSILENT /SUPPRESSMSGBOXES`, so use `SuppressibleMsgBox`, never `MsgBox`.
 
-### Build (Linux)
+### NixOS
 
-```bash
-./scripts/build/build-deb.sh            # Debian package
-```
+`flake.nix` builds the app (`packages.phoenix`) and exports `nixosModules.default` (`nix/module.nix`: `programs.phoenix.*`, plus the SIEM agent service in `nix/wazuh-agent.nix`). On NixOS the app can't install packages or write `/etc`, so ClamAV units, the agent and the VPN prerequisites come from this module. VM test: `nix build .#checks.x86_64-linux.nixos-module -L` (needs the phoenix-agent `.deb` in the store).
 
 ## Architecture
 
@@ -103,11 +101,11 @@ Platform-specific implementations live in `*_functions_{darwin,linux,windows}.py
 
 ### Settings & Secrets
 
-`utils/settings.py` provides namespaced JSON config with Fernet encryption for secrets (prefixed `ENC:`). Master key stored in system keyring. Config dirs (legacy directory names kept for install compatibility, pending migration): `~/Library/Application Support/Resistine` (macOS), `%APPDATA%/Resistine` (Windows), `~/.config/resistine` (Linux).
+`utils/settings.py` provides namespaced JSON config with Fernet encryption for secrets (prefixed `ENC:`). Master key stored in system keyring. Config dirs: `~/Library/Application Support/Phoenix` (macOS), `%APPDATA%/Phoenix` (Windows), `~/.config/phoenix` (Linux); a pre-rebrand `Resistine`/`resistine` dir and the `resistine-master-key` keyring entry are migrated on first start.
 
 ### Auth
 
-`plugins/login/oidc.py` implements OIDC/MAS login (PKCE, loopback redirect, device-code fallback); `plugins/vpn/provisioning.py` fetches this device's VPN config from the Phoenix API after sign-in. Logout revokes the session and releases the device (`plugins/settings/main.py:_revoke_session`).
+`main.py` is the app entry point (builds a `QApplication` and the `gui/app_window.py` main window). UI components are in `gui/`. The plugin manager injects plugin screens into the main window. Theme switching (light/dark) via `gui/theme_manager.py`.
 
 ### Logging
 

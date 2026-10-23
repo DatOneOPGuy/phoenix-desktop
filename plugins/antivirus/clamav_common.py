@@ -30,7 +30,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from utils.logger import logger
 from utils.settings import get_config_dir
-from utils.i18n import get_text
 
 # ── Timeout constants ─────────────────────────────────────
 SOCKET_PING_TIMEOUT = 2          # seconds: zPING handshake timeout
@@ -111,7 +110,7 @@ def _get_platform():
     elif system == "Windows":
         from plugins.antivirus import defender_windows as mod
     else:
-        raise RuntimeError(get_text("antivirus.clamav_common.unsupported_platform_system", system=system))
+        raise RuntimeError(f"Unsupported platform: {system}")
     return mod
 
 
@@ -663,7 +662,7 @@ def _scan_dir_socket(
         pool.shutdown(wait=False, cancel_futures=True)
 
     if skipped:
-        logger.warning(get_text("antivirus.clamav_common.clamav_skipped_files_skipped_due", skipped=skipped))
+        logger.warning(f"ClamAV: {skipped} files skipped due to errors")
 
     result["scanned"] = scanned
     result["infected"] = infected
@@ -771,7 +770,7 @@ def scan_path(
         if ok:
             active_socket = _active_clamd_socket()
         else:
-            logger.warning(get_text("antivirus.clamav_common.clamav_could_not_start_clamd", msg=msg))
+            logger.warning(f"ClamAV: could not start clamd, falling back: {msg}")
 
     # Direct socket scanning — parallel for directories, fast for files.
     # Bypasses the clamdscan subprocess entirely.

@@ -15,9 +15,10 @@ from plugins.vpn.wireguard.config_validation import (
 )
 from utils import settings as app_settings
 from utils.logger import logger
-from utils.i18n import get_text
 
-RESISTINE_CONFIG_NAME = "resistine"
+PHOENIX_CONFIG_NAME = "phoenix"
+# Earlier names of the default config, renamed to PHOENIX_CONFIG_NAME once.
+LEGACY_CONFIG_NAMES = ("resistine", "wg0")
 SETTINGS_NAMESPACE = "vpn"
 
 
@@ -45,7 +46,7 @@ class VPNConfigManager:
         """List all available .conf files.
 
         Returns a list of dicts sorted with Phoenix default first:
-        [{"name": "resistine", "display_name": "Phoenix (Default)",
+        [{"name": "phoenix", "display_name": "Phoenix (Default)",
           "source": "api", "path": "/path/to/file.conf"}, ...]
         """
         names = self._list_conf_files()
@@ -62,13 +63,13 @@ class VPNConfigManager:
             })
 
         # Sort: Phoenix default first, then alphabetical
-        configs.sort(key=lambda c: (0 if c["name"] == RESISTINE_CONFIG_NAME else 1, c["name"]))
+        configs.sort(key=lambda c: (0 if c["name"] == PHOENIX_CONFIG_NAME else 1, c["name"]))
         return configs
 
     def get_active_config_name(self):
         """Get the name of the currently active config.
 
-        Falls back to resistine, then first found config.
+        Falls back to the Phoenix default, then first found config.
         Returns None if no configs exist.
         """
         active = app_settings.get(SETTINGS_NAMESPACE, "active_config")
@@ -78,10 +79,10 @@ class VPNConfigManager:
         if active and os.path.exists(self.config_path(active)):
             return active
 
-        # Fallback: try phoenix
-        if os.path.exists(os.path.join(self.wireguard_folder, f"{RESISTINE_CONFIG_NAME}.conf")):
-            self.set_active_config(RESISTINE_CONFIG_NAME)
-            return RESISTINE_CONFIG_NAME
+        # Fallback: the Phoenix default
+        if os.path.exists(os.path.join(self.wireguard_folder, f"{PHOENIX_CONFIG_NAME}.conf")):
+            self.set_active_config(PHOENIX_CONFIG_NAME)
+            return PHOENIX_CONFIG_NAME
 
         # Fallback: first .conf found
         names = self._list_conf_files()
@@ -117,7 +118,7 @@ class VPNConfigManager:
     def import_config(self, source_path, content):
         try:
             if not content or not content.strip():
-                raise ValueError(get_text("vpn.config_manager.config_content_is_empty"))
+                raise ValueError("Config content is empty")
 
             filename = os.path.basename(source_path)
             config_name = self.sanitize_filename(filename)
@@ -144,7 +145,7 @@ class VPNConfigManager:
             return True, config_name
 
         except Exception as e:
-            logger.error(get_text("vpn.failed_to_import_config_e", e=e))
+            logger.error(f"Failed to import config: {e}")
             return False, str(e)
 
     def delete_config(self, config_name):
@@ -153,7 +154,7 @@ class VPNConfigManager:
         Refuses to delete the Phoenix default config.
         Returns (True, "") on success or (False, reason) on failure.
         """
-        if config_name == RESISTINE_CONFIG_NAME:
+        if config_name == PHOENIX_CONFIG_NAME:
             return False, "Cannot delete the Phoenix default configuration"
 
         try:
@@ -169,7 +170,7 @@ class VPNConfigManager:
             registry.pop(config_name, None)
             app_settings.set(SETTINGS_NAMESPACE, "config_registry", registry)
 
-            # If deleted config was active, switch to phoenix or first available
+            # If deleted config was active, switch to the default or first available
             active = app_settings.get(SETTINGS_NAMESPACE, "active_config")
             if active == config_name:
                 self.get_active_config_name()  # triggers fallback logic to set a new active config
@@ -187,34 +188,47 @@ class VPNConfigManager:
         registry[config_name] = {
             "source": source,
             "display_name": display_name or (
-                "Phoenix (Default)" if config_name == RESISTINE_CONFIG_NAME else config_name
+                "Phoenix (Default)" if config_name == PHOENIX_CONFIG_NAME else config_name
             ),
         }
         app_settings.set(SETTINGS_NAMESPACE, "config_registry", registry)
 
     def get_display_name(self, config_name):
         """Get human-readable display name for a config."""
-        if config_name == RESISTINE_CONFIG_NAME:
+        if config_name == PHOENIX_CONFIG_NAME:
             return "Phoenix (Default)"
         registry = app_settings.get(SETTINGS_NAMESPACE, "config_registry", {})
         entry = registry.get(config_name, {})
         return entry.get("display_name", config_name)
 
-    def is_resistine_config(self, config_name):
+    def is_default_config(self, config_name):
         """Check if a config is the Phoenix API config."""
-        return config_name == RESISTINE_CONFIG_NAME
+        return config_name == PHOENIX_CONFIG_NAME
 
     def migrate_legacy_config(self):
-        """One-time migration: rename wg0.conf to resistine_default.conf."""
-        legacy_path = os.path.join(self.wireguard_folder, "wg0.conf")
-        new_path = os.path.join(self.wireguard_folder, f"{RESISTINE_CONFIG_NAME}.conf")
+        """One-time rename of the default config to ``phoenix.conf``.
 
-        if os.path.exists(legacy_path) and not os.path.exists(new_path):
+        Earlier builds called it ``resistine.conf`` (and before that
+        ``wg0.conf``). The file, its registry entry and the active-config
+        setting move to the new name. Returns True if something was renamed.
+        """
+        new_path = os.path.join(self.wireguard_folder, f"{PHOENIX_CONFIG_NAME}.conf")
+        if os.path.exists(new_path):
+            return False
+        for legacy in LEGACY_CONFIG_NAMES:
+            legacy_path = os.path.join(self.wireguard_folder, f"{legacy}.conf")
+            if not os.path.exists(legacy_path):
+                continue
             os.rename(legacy_path, new_path)
             os.chmod(new_path, 0o600)
-            self.register_config(RESISTINE_CONFIG_NAME, source="api")
-            self.set_active_config(RESISTINE_CONFIG_NAME)
-            logger.info(f"Migrated wg0.conf -> {RESISTINE_CONFIG_NAME}.conf")
+            registry = app_settings.get(SETTINGS_NAMESPACE, "config_registry", {})
+            source = (registry.pop(legacy, None) or {}).get("source", "api")
+            app_settings.set(SETTINGS_NAMESPACE, "config_registry", registry)
+            self.register_config(PHOENIX_CONFIG_NAME, source=source)
+            active = app_settings.get(SETTINGS_NAMESPACE, "active_config")
+            if active in (None, legacy):
+                self.set_active_config(PHOENIX_CONFIG_NAME)
+            logger.info(f"Migrated {legacy}.conf -> {PHOENIX_CONFIG_NAME}.conf")
             return True
         return False
 
@@ -222,14 +236,14 @@ class VPNConfigManager:
         """Sanitize a filename for use as a config name.
 
         Removes .conf extension, replaces non-alphanumeric chars with underscore,
-        prevents collision with resistine.
+        prevents collision with the default config name.
         """
         name = os.path.splitext(filename)[0]
         name = re.sub(r"[^a-zA-Z0-9_-]", "_", name)
         name = name.strip("_-")
         if not name:
             name = "imported"
-        if name == RESISTINE_CONFIG_NAME:
+        if name == PHOENIX_CONFIG_NAME:
             name = f"{name}_user"
         return name
 

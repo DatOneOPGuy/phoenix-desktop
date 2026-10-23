@@ -7,25 +7,18 @@ Licensed under the GNU General Public License v2 or later
 """
 
 import os
-import platform
 import socket
 import subprocess
 import tempfile
-import re
 import shutil
-import ssl
-import urllib.error
-import urllib.request
+import re
 
 from utils import settings
 from utils.logger import logger
 from gui.dialogs import CTkPasswordDialog
 
+from plugins.wazuh.agent import enrollment, phoenix_packages
 from plugins.wazuh.config import (
-    LINUX_WAZUH_DEB_URL,
-    LINUX_WAZUH_RPM_URL,
-    LINUX_PKG_ARCH_MAP_DEB,
-    LINUX_PKG_ARCH_MAP_RPM,
     WAZUH_MANAGER,
     WAZUH_MANAGER_PORT,
     WAZUH_PROTOCOL,
@@ -33,7 +26,6 @@ from plugins.wazuh.config import (
     LINUX_WAZUH_DIR,
     LINUX_WAZUH_DIR_CANDIDATES,
 )
-from utils.i18n import get_text
 
 # Deployment-variable prefix passed to the package installer.  Carries the
 # manager address, ports, protocol, agent name, and group so the package's
@@ -50,11 +42,33 @@ def _deploy_env(agent_name, agent_group):
     )
 
 def run_privileged_command(command, timeout=120):
+    """Traced entry point; see _run_privileged_command."""
+    from utils import http_trace
+    http_trace.event("root command (pkexec)", command)
+    result = _run_privileged_command(command, timeout)
+    http_trace.event("root command result", result if isinstance(result, tuple)
+                     else getattr(result, "returncode", result))
+    return result
+
+
+def _run_privileged_command(command, timeout=120):
     """
     Run a command with elevated privileges using pkexec or sudo.
     Shows the password dialog if sudo is used.
     Returns (success, output).
     """
+    if os.geteuid() == 0:
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+        except Exception as e:
+            logger.error(f"Error running command as root: {e}")
+            return False, str(e)
+        out = result.stdout.strip()
+        if result.returncode != 0:
+            logger.error(f"Command failed as root (code {result.returncode}): {result.stderr.strip()}")
+            return False, result.stderr.strip() + out
+        return True, out
+
     logger.info(f"Attempting to run with pkexec: {command}")
     try:
         result = subprocess.run(
@@ -67,16 +81,16 @@ def run_privileged_command(command, timeout=120):
                 f"pkexec failed (code {result.returncode}): {result.stderr.strip()}. Falling back to sudo."
             )
     except FileNotFoundError:
-        logger.warning(get_text("wazuh.agent.wazuh_functions_linux.pkexec_not_found_falling_back"))
+        logger.warning("pkexec not found, falling back to sudo")
     except Exception as e:
-        logger.warning(get_text("wazuh.agent.wazuh_functions_linux.error_running_pkexec_e", e=e))
+        logger.warning(f"Error running pkexec: {e}")
 
     logger.info("Falling back to sudo with themed password prompt")
     dialog = CTkPasswordDialog(title="Authentication Required", text="Enter password to modify Wazuh Agent settings:")
     password = dialog.get_input()
 
     if not password:
-        logger.error(get_text("vpn.wireguard.vpn_functions_linux.user_cancelled_password_prompt"))
+        logger.error("User cancelled password prompt")
         return False, "User cancelled"
 
     try:
@@ -121,17 +135,8 @@ def get_agent_name():
     return re.sub(r"[^A-Za-z0-9.\-_]", "", name)
 
 def get_agent_group():
-    """Return the user's email with '@' replaced by '-' to match the
-    canonical group name created by /verify-otp.
-    """
-    email = settings.get("auth", "email", "default")
-    if email and email != "default":
-        # Allowlist like the darwin/windows twins: this value is interpolated
-        # into root-executed sh -c strings (enrollment, ossec.conf sed), and
-        # the settings file is writable by the unprivileged user.
-        group = re.sub(r"[^A-Za-z0-9.\-_]", "", email.replace("@", "-"))
-        return group or "default"
-    return "default"
+    """The Wazuh group of this user's agents (u_<Matrix localpart>)."""
+    return enrollment.agent_group()
 
 def needs_reenrollment():
     enrolled = settings.get("wazuh", "enrolled_email", "")
@@ -153,7 +158,8 @@ def _set_ossec_agent_name(ossec_conf, agent_name):
       1. <agent_name> already present  -> replace it
       2. <enrollment> present, no name -> insert <agent_name> into it
       3. neither                       -> insert a full <enrollment> block
-                                          before </client>
+                                          at the end of <agent> (5.0), or of
+                                          <client> in a config kept from 4.x
     """
     return (
         f"if grep -q '<agent_name>' '{ossec_conf}'; then "
@@ -161,7 +167,8 @@ def _set_ossec_agent_name(ossec_conf, agent_name):
         f"elif grep -q '<enrollment>' '{ossec_conf}'; then "
         f"sed -i 's|<enrollment>|<enrollment>\\n      <agent_name>{agent_name}</agent_name>|' '{ossec_conf}'; "
         f"else "
-        f"sed -i 's|</client>|  <enrollment>\\n      <agent_name>{agent_name}</agent_name>\\n    </enrollment>\\n  </client>|' '{ossec_conf}'; "
+        f"tag=client; grep -q '</agent>' '{ossec_conf}' && tag=agent; "
+        f"sed -i \"s|</$tag>|  <enrollment>\\n      <agent_name>{agent_name}</agent_name>\\n    </enrollment>\\n  </$tag>|\" '{ossec_conf}'; "
         f"fi"
     )
 
@@ -182,12 +189,28 @@ def _set_ossec_enrollment(ossec_conf, agent_name, agent_group):
         _set_ossec_agent_name(ossec_conf, agent_name)
         + "\n"
         + (
-            f"if grep -q '<groups>' '{ossec_conf}'; then "
-            f"sed -i 's|<groups>.*</groups>|<groups>{agent_group}</groups>|' '{ossec_conf}'; "
-            f"else "
-            f"sed -i 's|<enrollment>|<enrollment>\\n      <groups>{agent_group}</groups>|' '{ossec_conf}'; "
-            f"fi"
+            # Only the <groups> inside <enrollment>: other modules have their
+            # own (syscollector's <groups>yes</groups>), and changing those
+            # stops wazuh-modulesd ("Invalid content for tag 'groups'").
+            f"sed -i '/<enrollment>/,/<\\/enrollment>/{{/<groups>/d}}' '{ossec_conf}'; "
+            f"sed -i 's|<enrollment>|<enrollment>\\n      <groups>{agent_group}</groups>|' '{ossec_conf}'"
         )
+        + "\n"
+        + _set_ossec_manager(ossec_conf)
+    )
+
+
+def _set_ossec_manager(ossec_conf):
+    """Shell that fills in the manager if the package left its placeholder.
+
+    The package's install script normally writes the manager from
+    WAZUH_MANAGER; when it fails (the 5.0.0-1 .deb's postinst looks in
+    /var/ossec instead of /opt/phoenix-agent), ossec.conf keeps MANAGER_IP and
+    wazuh-agentd exits with "Invalid server address found: 'MANAGER_IP'".
+    """
+    return (
+        f"sed -i -e 's|<endpoint>MANAGER_IP</endpoint>|<endpoint>{WAZUH_MANAGER}:{WAZUH_MANAGER_PORT}</endpoint>|' "
+        f"-e 's|<address>MANAGER_IP</address>|<address>{WAZUH_MANAGER}</address>|' '{ossec_conf}'"
     )
 
 
@@ -226,17 +249,25 @@ def _get_os_info():
         return "arch"
     return None
 
+# Package store platform per package family (amd64 only).
+_PACKAGE_PLATFORMS = {"deb": "linux-amd64", "rpm": "linux-amd64-rpm"}
+
+
+def package_platform():
+    """The package store platform for this machine, or None when none is built.
+
+    Debian/Ubuntu get the .deb (linux-amd64), Fedora/RHEL/openSUSE the .rpm
+    (linux-amd64-rpm).
+    """
+    if phoenix_packages.platform_key() != "linux-amd64":
+        return None
+    return _PACKAGE_PLATFORMS.get(_get_os_info())
+
+
 def get_package_url():
-    arch = platform.machine()
-    os_type = _get_os_info()
-    if os_type == "deb":
-        arch_suffix = LINUX_PKG_ARCH_MAP_DEB.get(arch, "amd64")
-        return LINUX_WAZUH_DEB_URL.format(arch=arch_suffix)
-    elif os_type == "rpm" or os_type == "arch":
-        # Arch uses the RPM artifact and extracts it with bsdtar (libarchive); upstream Wazuh ships no pacman package
-        arch_suffix = LINUX_PKG_ARCH_MAP_RPM.get(arch, "x86_64")
-        return LINUX_WAZUH_RPM_URL.format(arch=arch_suffix)
-    return None
+    """Manifest URL of the Phoenix agent for this machine, or None."""
+    plat = package_platform()
+    return phoenix_packages.manifest_url(plat) if plat else None
 
 def installed_agent_dir():
     """Return the install dir of an existing agent, or None.
@@ -254,18 +285,23 @@ def is_agent_installed():
     return installed_agent_dir() is not None
 
 
-def is_app_managed_agent():
-    """True only for the agent this app installs (upstream package, /var/ossec).
+_APP_INSTALLED = "app_installed"  # wazuh settings flag, set by full_install()
 
-    An agent under another candidate dir was installed some other way (the
-    Phoenix package, the NixOS module); the app shows it but never removes or
-    re-enrolls it.
+
+def is_app_managed_agent():
+    """True only for the agent this app installed (the Phoenix .deb in
+    /opt/phoenix-agent, installed by full_install()).
+
+    The same package may also have been installed by an admin, and an agent
+    under another candidate dir was installed some other way (an upstream
+    package, the NixOS module); the app shows those but never removes or
+    re-enrolls them.
     """
-    return os.path.isdir(LINUX_WAZUH_DIR)
+    return os.path.isdir(LINUX_WAZUH_DIR) and bool(settings.get("wazuh", _APP_INSTALLED, False))
 
 def get_agent_status():
     if not is_agent_installed():
-        return get_text("antivirus.not_installed")
+        return "Not Installed"
     
     try:
         result = subprocess.run(
@@ -277,7 +313,7 @@ def get_agent_status():
         if result.stdout.strip() == "active":
             return "Running"
     except Exception as e:
-        logger.warning(get_text("wazuh.agent.wazuh_functions_linux.could_not_check_wazuh_agent", e=e))
+        logger.warning(f"Could not check wazuh-agent status: {e}")
         
     # Check processes
     try:
@@ -311,38 +347,20 @@ def get_agent_connection():
 _DOWNLOAD_TIMEOUT = 60  # seconds per socket operation
 
 def download_package(progress_callback=None):
-    url = get_package_url()
-    if not url:
-        logger.error("Unsupported OS type or architecture for Wazuh install")
-        return None
-        
-    tmp_dir = tempfile.mkdtemp(prefix="wazuh_")
-    filename = url.split("/")[-1]
-    pkg_path = os.path.join(tmp_dir, filename)
+    """Download the signed Phoenix agent .deb or .rpm (needs a Phoenix sign-in).
 
-    if progress_callback:
-        progress_callback("Downloading Wazuh agent...")
-
-    logger.info(f"Downloading Wazuh package from {url}")
-    try:
-        # urlopen verifies TLS certificates by default; pass an explicit
-        # default context anyway, plus a timeout so a stalled server can't
-        # hang the install thread forever (urlretrieve has no timeout).
-        ctx = ssl.create_default_context()
-        with urllib.request.urlopen(url, timeout=_DOWNLOAD_TIMEOUT, context=ctx) as resp, \
-                open(pkg_path, "wb") as out:
-            shutil.copyfileobj(resp, out)
-        logger.info(f"Downloaded to {pkg_path}")
-        return pkg_path
-    except urllib.error.HTTPError as e:
-        logger.error(f"Download failed: HTTP {e.code} {e.reason}")
+    Returns the verified local path, or None.
+    """
+    plat = package_platform()
+    if not plat:
+        msg = ("Phoenix builds the Linux agent for Debian/Ubuntu and "
+               "Fedora/RHEL/openSUSE (amd64) only.")
+        logger.error(msg)
+        if progress_callback:
+            progress_callback(msg)
         return None
-    except urllib.error.URLError as e:
-        logger.error(f"Download failed: {e.reason}")
-        return None
-    except Exception as e:
-        logger.error(f"Download error: {e}")
-        return None
+    return phoenix_packages.download_or_none(
+        tempfile.mkdtemp(prefix="phoenix_agent_"), progress_callback, plat=plat)
 
 def write_env_file(agent_name, agent_group):
     # Not using env file for Linux, we'll pass via environment to the installer or patch ossec.conf
@@ -490,8 +508,8 @@ def build_remove_script(wipe_keys: bool = False) -> str:
         )
 
     if not is_app_managed_agent():
-        # The only agent (if any) was installed some other way (Phoenix
-        # package, NixOS module). Its service, unit and wazuh user belong to
+        # The only agent (if any) was installed some other way (by an admin,
+        # an upstream package, the NixOS module). Its service, unit and wazuh user belong to
         # that install, so only the app's key backup is touched.
         return f"""
         {key_phase if wipe_keys else ""}
@@ -527,13 +545,32 @@ def remove_agent(wipe_keys: bool = False):
     if not agent_present(wipe_keys):
         return True
 
+    managed = is_app_managed_agent()
     script = build_remove_script(wipe_keys)
     success, output = run_privileged_command(["sh", "-c", script])
     if success:
+        if managed:
+            settings.set("wazuh", _APP_INSTALLED, False)
         logger.info("Wazuh agent removed successfully")
     else:
         logger.error(f"Failed to remove Wazuh agent: {output}")
     return success
+
+def _rpm_install_cmd(deploy_env, pkg_path):
+    """Shell command installing the agent .rpm with this system's package manager.
+
+    The package is verified against the signed manifest before this runs; it
+    carries no GPG signature, hence --nogpgcheck / --allow-unsigned-rpm.
+    """
+    if shutil.which("dnf"):
+        return f"{deploy_env} dnf -y install --nogpgcheck '{pkg_path}'"
+    if shutil.which("zypper"):
+        return (f"{deploy_env} zypper --non-interactive install "
+                f"--allow-unsigned-rpm '{pkg_path}'")
+    if shutil.which("yum"):
+        return f"{deploy_env} yum -y install --nogpgcheck '{pkg_path}'"
+    return f"{deploy_env} rpm -Uvh '{pkg_path}'"
+
 
 def full_install(progress_callback=None):
     pkg_path = download_package(progress_callback)
@@ -543,6 +580,11 @@ def full_install(progress_callback=None):
         
     agent_name = get_agent_name()
     agent_group = get_agent_group()
+    # Server-side enrollment (user's group); None -> agent-auth below.
+    enrolled = enrollment.request(agent_name)
+    if enrolled:
+        agent_name = enrolled.agent_name
+        agent_group = enrolled.group
 
     os_type = _get_os_info()
     ossec_conf = f"{LINUX_WAZUH_DIR}/etc/ossec.conf"
@@ -551,7 +593,8 @@ def full_install(progress_callback=None):
     if os_type == "deb":
         install_cmd = f"{deploy_env} dpkg -i '{pkg_path}'"
     elif os_type == "rpm":
-        install_cmd = f"{deploy_env} rpm -ihv '{pkg_path}'"
+        # dnf/zypper pull in the package's dependencies; rpm -U also upgrades.
+        install_cmd = _rpm_install_cmd(deploy_env, pkg_path)
     elif os_type == "arch":
         # No postinst runs when extracting with bsdtar — create the wazuh user/group, extract,
         # fix ownership, then stamp manager + group into ossec.conf manually
@@ -561,20 +604,25 @@ def full_install(progress_callback=None):
             "--home /var/ossec --shell /sbin/nologin -g wazuh wazuh) && "
             f"bsdtar -xpf '{pkg_path}' -C / && "
             "chown -R wazuh:wazuh /var/ossec && "
-            f"sed -i \"s|<address>.*</address>|<address>{WAZUH_MANAGER}</address>|\" '{ossec_conf}' && "
-            f"sed -i \"s|<groups>.*</groups>|<groups>{agent_group}</groups>|\" '{ossec_conf}'"
+            f"sed -i \"s|<address>.*</address>|<address>{WAZUH_MANAGER}</address>|\" '{ossec_conf}'"
         )
 
     agent_auth = f"{LINUX_WAZUH_DIR}/bin/agent-auth"
     backup_dir = os.path.dirname(_KEY_BACKUP)
 
-    # Always re-enroll so the manager receives the group on every install.
+    # The key from the Phoenix API, or (fallback) a fresh agent-auth
+    # registration so the manager receives the group on every install.
     # The key backup is still written for future repair/recovery flows.
     # -p is the port flag; -P (uppercase) is the password-FILE path — passing
     # the port to -P is a no-op that only works because 1515 is the default.
+    if enrolled:
+        register = enrollment.key_write_sh(enrolled.key_file, _CLIENT_KEYS)
+    else:
+        register = (f"rm -f '{_CLIENT_KEYS}'\n"
+                    f"            '{agent_auth}' -m '{WAZUH_MANAGER}' -p '{WAZUH_REGISTRATION_PORT}' "
+                    f"-A '{agent_name}' -G '{agent_group}'")
     enrollment_script = f"""
-            rm -f '{_CLIENT_KEYS}'
-            '{agent_auth}' -m '{WAZUH_MANAGER}' -p '{WAZUH_REGISTRATION_PORT}' -A '{agent_name}' -G '{agent_group}'
+            {register}
             mkdir -p '{backup_dir}' && cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}'
             chown {os.getuid()}:{os.getgid()} '{_KEY_BACKUP}' 2>/dev/null
         """
@@ -594,15 +642,17 @@ def full_install(progress_callback=None):
         progress_callback("Installing Wazuh agent (admin password required)...")
         
     success, output = run_privileged_command(["sh", "-c", script])
-    
+    enrollment.discard(enrolled)
+
     if success or is_agent_installed():
+        settings.set("wazuh", _APP_INSTALLED, True)
         settings.set("wazuh", "enrolled_email", settings.get("auth", "email", ""))
         if progress_callback:
             progress_callback("Wazuh agent installed and running")
         return True
         
     if progress_callback:
-        progress_callback(get_text("wazuh.installation_failed"))
+        progress_callback("Installation failed")
     return False
 
 def reenroll_agent():
@@ -628,12 +678,22 @@ def reenroll_agent():
     agent_auth = f"{LINUX_WAZUH_DIR}/bin/agent-auth"
     ossec_conf = f"{LINUX_WAZUH_DIR}/etc/ossec.conf"
     backup_dir = os.path.dirname(_KEY_BACKUP)
+    # The Phoenix API answers with the manager's current key for this device
+    # (a new agent if the old one was deleted there); else agent-auth.
+    enrolled = enrollment.request(new_name)
+    if enrolled:
+        new_name = enrolled.agent_name
+        group = enrolled.group
+        register = enrollment.key_write_sh(enrolled.key_file, _CLIENT_KEYS)
+    else:
+        register = (f"'{agent_auth}' -m '{WAZUH_MANAGER}' -p '{WAZUH_REGISTRATION_PORT}' "
+                    f"-A '{new_name}' -G '{group}'")
 
     script = f"""
         systemctl stop wazuh-agent 2>/dev/null
         pkill -9 -f '{LINUX_WAZUH_DIR}/bin/wazuh-' 2>/dev/null
         rm -f '{_CLIENT_KEYS}' '{_KEY_BACKUP}'
-        '{agent_auth}' -m '{WAZUH_MANAGER}' -p '{WAZUH_REGISTRATION_PORT}' -A '{new_name}' -G '{group}'
+        {register}
         if [ ! -s '{_CLIENT_KEYS}' ]; then echo REENROLL_NO_KEY; exit 1; fi
         chmod 640 '{_CLIENT_KEYS}'
         chown wazuh:wazuh '{_CLIENT_KEYS}' 2>/dev/null || chown root:wazuh '{_CLIENT_KEYS}' 2>/dev/null
@@ -647,6 +707,7 @@ def reenroll_agent():
         echo REENROLL_OK
     """
     success, output = run_privileged_command(["sh", "-c", script])
+    enrollment.discard(enrolled)
     if success and "REENROLL_NO_KEY" not in (output or ""):
         logger.info(f"Wazuh re-enrolled under fresh name {new_name}")
         return (True, f"Re-enrolled as {new_name}")

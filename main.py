@@ -1,6 +1,6 @@
 ## @file main.py
 ## @namespace main
-"""Entry point for the Resistine AI EndPoint application (PyQt6).
+"""Entry point for the Phoenix AI EndPoint application (PyQt6).
 
 Author: Petr, Javier, Jackie and the Phoenix Team
 Copyright (c) Phoenix 2025
@@ -17,7 +17,6 @@ from PyQt6.QtWidgets import QApplication
 from utils import functions as functions
 from utils import settings
 from utils.logger import logger, setup_logging
-from utils.i18n import get_text
 
 DEBUG = False
 
@@ -95,11 +94,17 @@ def _build_app() -> tuple[QApplication, object]:
     """Create the QApplication + main window and wire startup services."""
     _set_resolution_scaling()
     qt_app = QApplication(sys.argv)
-    qt_app.setApplicationName("Resistine")
-    qt_app.setApplicationDisplayName("Resistine")
+    qt_app.setApplicationName("Phoenix")
+    qt_app.setApplicationDisplayName("Phoenix")
     # Drives the GNOME dock-tile/.desktop association on Linux (parallels the
     # WM_CLASS approach the CTk app used). Harmless elsewhere.
-    qt_app.setDesktopFileName("resistine")
+    qt_app.setDesktopFileName("phoenix")
+
+    # One Phoenix per user: a second launch shows the running one and exits.
+    from utils import single_instance
+    if not single_instance.acquire():
+        logger.info("Phoenix is already running; showed that window instead")
+        return qt_app, None
 
     from gui.app_window import AppWindow
 
@@ -108,6 +113,10 @@ def _build_app() -> tuple[QApplication, object]:
     # Login plugin is uninstallable via the Store; respect that here so
     # users who removed it don't get the login screen on next launch.
     login_uninstalled = _is_login_plugin_uninstalled()
+
+    if settings.get("auth", "logged_in", False) and not _session_still_valid():
+        logger.info("🔐 Phoenix session ended on the server — signing in again.")
+        settings.clear_namespace("auth")
 
     if settings.get("auth", "logged_in", False) or login_uninstalled:
         if login_uninstalled:
@@ -125,7 +134,7 @@ def _build_app() -> tuple[QApplication, object]:
         from utils import notifications
         notifications.init()
     except Exception as e:
-        logger.warning(get_text("main.failed_to_initialize_system_notifications", e=e))
+        logger.warning(f"Failed to initialize system notifications: {e}")
 
     try:
         from utils.linux_desktop import ensure_desktop_entry
@@ -133,13 +142,51 @@ def _build_app() -> tuple[QApplication, object]:
     except Exception as e:
         logger.debug(f"Desktop entry setup skipped: {e}")
 
-    try:
-        from utils import updates
-        updates.init(window)
-    except Exception as e:
-        logger.warning(get_text("main.failed_to_start_auto_updater", e=e))
+    # Auto-update is off for now. Without init no backend starts (Sparkle,
+    # WinSparkle or the Linux scheduler), so the app never checks on its own;
+    # Settings' "Check for updates" reports updates as unavailable.
+    # try:
+    #     from utils import updates
+    #     updates.init(window)
+    # except Exception as e:
+    #     logger.warning(f"Failed to start auto-updater: {e}")
+
+    # Native system tray (Windows). Replaces the old standalone pystray tray
+    # that the packaged build never launched. Closing the window then hides to
+    # the tray; only the tray's Quit exits. See gui/system_tray.py.
+    if sys.platform == "win32":
+        try:
+            from gui.system_tray import SystemTray
+            tray = SystemTray(window)
+            if tray.install():
+                window._tray = tray  # window.closeEvent hides to it
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Failed to start system tray: {e}")
+
+    single_instance.listen(lambda: _bring_forward(window))
 
     return qt_app, window
+
+
+def _bring_forward(window) -> None:
+    """Show the window, also when minimized or hidden to the tray."""
+    if window.isMinimized():
+        window.showNormal()
+    window.show()
+    window.raise_()
+    window.activateWindow()
+
+
+def _session_still_valid() -> bool:
+    """False only when MAS rejected the stored session (signed out elsewhere).
+
+    Offline or no MAS session (legacy OTP login) counts as valid."""
+    try:
+        from plugins.login.oidc import validate_session
+        return validate_session()
+    except Exception as e:
+        logger.warning(f"Session check skipped: {e}")
+        return True
 
 
 def _is_login_plugin_uninstalled() -> bool:
@@ -155,7 +202,7 @@ def _is_login_plugin_uninstalled() -> bool:
             state = json.load(f)
         return "007" in state.get("uninstalled", [])
     except Exception as e:
-        logger.warning(get_text("main.could_not_read_plugin_state", e=e))
+        logger.warning(f"Could not read plugin state: {e}")
         return False
 
 
@@ -183,9 +230,11 @@ def main() -> int:
     # console windows. No-op on other platforms.
     from utils.win_console import suppress_child_console_windows
     suppress_child_console_windows()
+    # Linux build: children get the system's libraries, not the bundle's.
+    functions.restore_system_library_path()
 
     parser = argparse.ArgumentParser(
-        description=get_text("main.resistine_desktop_application"),
+        description="Phoenix Desktop Application",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("-d", "--debug", action="store_true",
@@ -193,6 +242,8 @@ def main() -> int:
     parser.add_argument("-l", "--log-level",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
                         default="INFO", help="Set logging level (default: INFO)")
+    parser.add_argument("--trace", action="store_true",
+                        help="Write every HTTP exchange (secrets masked) to logs/trace-*.log")
     args = parser.parse_args()
 
     if args.debug or functions.is_running_in_ide():
@@ -207,15 +258,23 @@ def main() -> int:
         a in sys.argv for a in ["-l", "--log-level"]
     ):
         log_level = "DEBUG"
+    # Before the file log sink creates the new config dir.
+    settings.migrate_legacy_config_dir()
     setup_logging(level=log_level)
+    if args.trace or os.environ.get("PHOENIX_TRACE") == "1":
+        from utils import http_trace
+        trace_file = http_trace.enable(os.path.join(settings.get_config_dir(), "logs"))
+        logger.info(f"HTTP trace enabled: {trace_file}")
     _install_excepthook()
+    if sys.platform == "darwin":
+        from utils.functions import remove_legacy_bundle
 
-    # Apply the persisted UI language before any plugin builds its screen,
-    # so get_text() calls during construction use the right locale.
-    from utils import i18n
-    i18n.set_language(settings.get("ui", "language", i18n.DEFAULT_LANGUAGE))
+        if remove_legacy_bundle():
+            logger.info("Removed the old /Applications/Resistine.app")
 
     qt_app, window = _build_app()
+    if window is None:
+        return 0
 
     if DEBUG:
         logger.info("Debug mode enabled")

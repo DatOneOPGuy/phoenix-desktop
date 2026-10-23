@@ -90,7 +90,7 @@ class HelperToolManager:
                 "Contents", "MacOS", "resistine-vpn-cli"
             )
             if os.path.exists(old_cli_path):
-                logger.warning(get_text("vpn.wireguard.vpn_functions_darwin.using_legacy_cli_path_please"))
+                logger.warning("⚠️ Using legacy CLI path - please rebuild for full VPN support")
                 return old_cli_path
 
         # Development mode: VPN features require the built app bundle
@@ -142,7 +142,7 @@ class VPNHelper:
             logger.info("🔌 [VPN] No VPN in this build — not requesting the extension")
             return False
         try:
-            from .extension_activator import run_activation
+            from .extension_activator import ExtensionActivator, run_activation
             logger.info("🔌 [VPN] Triggering System Extension activation via Main App...")
             
             # Store reference to keep delegate alive
@@ -221,7 +221,7 @@ class VPNHelper:
     ) -> Tuple[bool, str]:
         """Check VPN status (interface_name is ignored - CLI uses 'status' without arguments)"""
         if not helper.cli_path:
-            logger.warning(get_text("vpn.wireguard.vpn_functions_darwin.helper_cli_path_not_available"))
+            logger.warning("⚠️ [HELPER] CLI path not available")
             return (False, "Stopped")
 
         try:
@@ -423,7 +423,7 @@ def check_wireguard_installed():
     return True
 
 
-def parse_and_create_vpn_config(vpn_config_json_string, config_name="resistine"):
+def parse_and_create_vpn_config(vpn_config_json_string, config_name="phoenix"):
     """
     Parse VPN configuration from server response and create WireGuard config file.
 
@@ -586,7 +586,7 @@ def setup_vpn_keys():
         return None
 
 
-def save_vpn_configuration(vpn_config_json, config_name="resistine"):
+def save_vpn_configuration(vpn_config_json, config_name="phoenix"):
     """
     Parse and save the VPN configuration.
     Returns the path to the saved config file if successful, None otherwise.
@@ -685,5 +685,5 @@ def is_extension_enabled():
         _extension_cache["timestamp"] = now
         return enabled
     except Exception as e:
-        logger.warning(get_text("vpn.wireguard.vpn_functions_darwin.extension_status_check_failed_e", e=e))
+        logger.warning(f"Extension status check failed: {e}")
         return False

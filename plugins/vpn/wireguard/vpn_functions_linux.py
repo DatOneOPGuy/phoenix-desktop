@@ -74,12 +74,32 @@ def is_admin():
 
 
 def run_privileged_command(command_args):
+    """Traced entry point; see _run_privileged_command."""
+    from utils import http_trace
+    http_trace.event("root command (pkexec)", command_args)
+    result = _run_privileged_command(command_args)
+    http_trace.event("root command result", result if isinstance(result, tuple)
+                     else getattr(result, "returncode", result))
+    return result
+
+
+def _run_privileged_command(command_args):
     """
     Run a command with elevated privileges using pkexec or sudo fallback.
 
     :param command_args: List of command arguments (e.g., ["wg", "show"])
     :return: subprocess.CompletedProcess or None if failed
     """
+    if is_admin():
+        try:
+            return subprocess.run(command_args, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Command failed as root (code {e.returncode}): "
+                         f"{e.stderr.strip() or e.stdout.strip() or 'No output'}")
+        except Exception as e:
+            logger.error(f"Error running command as root: {e}")
+        return None
+
     # Try pkexec first (standard GUI way). When pkexec is available it drives
     # the system polkit prompt, which already handles authentication — so we do
     # NOT pop a second, in-app sudo password dialog on top of it.
@@ -114,7 +134,7 @@ def run_privileged_command(command_args):
         except Exception as e:
             # pkexec itself could not be executed (e.g. missing polkit agent).
             # Only in this case do we fall back to the sudo password dialog.
-            logger.warning(get_text("vpn.wireguard.vpn_functions_linux.pkexec_could_not_run_e", e=e))
+            logger.warning(f"pkexec could not run: {e}. Falling back to sudo.")
 
     # Fallback to sudo with GUI password prompt (only reached when pkexec is
     # unavailable or failed to execute at all)
@@ -127,7 +147,7 @@ def run_privileged_command(command_args):
     password = dialog.get_input()
 
     if not password:
-        logger.warning(get_text("vpn.wireguard.vpn_functions_linux.user_cancelled_password_prompt"))
+        logger.warning("User cancelled password prompt")
         return None
 
     try:
@@ -274,13 +294,13 @@ def delete_wireguard_keys():
         return False
 
 
-def parse_and_create_vpn_config(vpn_config_json_string, config_name="resistine"):
+def parse_and_create_vpn_config(vpn_config_json_string, config_name="phoenix"):
     """
     Parse VPN configuration from server response and create WireGuard config file.
 
     Args:
         vpn_config_json_string: JSON string containing VPN config from server
-        config_name: Name for the config file (default: "resistine")
+        config_name: Name for the config file (default: "phoenix")
 
     Returns:
         str: Path to created config file, or None if failed
@@ -385,7 +405,7 @@ Endpoint = {endpoint}
         logger.error(f"Error: Missing required field in VPN config: {e}")
         return None
     except Exception as e:
-        logger.error(get_text("vpn.wireguard.vpn_functions_linux.error_creating_vpn_config_e", e=e))
+        logger.error(f"Error creating VPN config: {e}")
         return None
 
 
@@ -419,7 +439,7 @@ def check_service_status(interface_name, test_ip):
             )
             if ping_result.returncode != 0:
                 logger.warning(
-                    get_text("vpn.wireguard.vpn_functions_linux.interface_interface_name_up_but", interface_name=interface_name, test_ip=test_ip)
+                    f"Interface {interface_name} up but ping to {test_ip} failed."
                 )
 
         return "Running"
@@ -461,15 +481,39 @@ def stop_vpn(config_path):
             logger.error(f"Refusing to stop VPN: invalid interface name {iface!r}")
             return False
         etc_conf = f"/etc/wireguard/{iface}.conf"
-        # Use interface name so AppArmor-confined wg-quick (Ubuntu) can access
-        # the config; clean up the /etc/wireguard copy afterwards.
-        script = (
-            f"wg-quick down {shlex.quote(iface)}; rm -f {shlex.quote(etc_conf)}"
-        )
+        if _is_nixos():
+            # Started from the config in place (see start_vpn): no /etc copy.
+            script = f"{shlex.quote(_wg_quick())} down {shlex.quote(config_path)}"
+        else:
+            # Use interface name so AppArmor-confined wg-quick (Ubuntu) can
+            # access the config; clean up the /etc/wireguard copy afterwards.
+            script = (
+                f"{shlex.quote(_wg_quick())} down {shlex.quote(iface)}; rm -f {shlex.quote(etc_conf)}"
+            )
         result = run_privileged_command(["sh", "-c", script])
         return result is not None and result.returncode == 0
     except Exception as e:
         logger.error(f"Failed to stop VPN service: {e}")
+        return False
+
+
+def _wg_quick():
+    """Absolute path of wg-quick, resolved in the app's own environment.
+
+    pkexec resets PATH to /usr/sbin:/usr/bin:/sbin:/bin, which holds nothing
+    on NixOS (the app's package puts wireguard-tools on its own PATH only),
+    so the privileged shell gets the full path. nixpkgs' wg-quick is a
+    wrapper that brings its own dependencies (iproute2, procps, ...).
+    """
+    return shutil.which("wg-quick") or "wg-quick"
+
+
+def _is_nixos():
+    """NixOS: /etc is read-only (managed by the system config)."""
+    try:
+        with open("/etc/os-release", encoding="utf-8") as f:
+            return any(line.strip() in ("ID=nixos", 'ID="nixos"') for line in f)
+    except OSError:
         return False
 
 
@@ -492,7 +536,7 @@ def make_dns_compatible_config(config_path):
         with open(config_path, "r") as config_file:
             lines = config_file.readlines()
     except OSError as e:
-        logger.warning(get_text("vpn.wireguard.vpn_functions_linux.could_not_read_config_for", e=e))
+        logger.warning(f"Could not read config for DNS compatibility check: {e}")
         return config_path
 
     def is_dns_line(line):
@@ -593,13 +637,20 @@ def start_vpn(config_path):
         # Adapt DNS handling to whatever this host provides (resolvconf vs
         # resolvectl) so wg-quick doesn't fail on a missing resolvconf.
         src_conf = make_dns_compatible_config(config_path)
-        # Copy into /etc/wireguard/ first — Ubuntu's AppArmor profile for
-        # wg-quick only permits reading configs from that directory.
-        script = (
-            f"cp {shlex.quote(src_conf)} {shlex.quote(etc_conf)} && "
-            f"chmod 600 {shlex.quote(etc_conf)} && "
-            f"wg-quick up {shlex.quote(iface)}"
-        )
+        if _is_nixos():
+            # /etc is read-only on NixOS: run wg-quick on the user's config
+            # (~/.config/phoenix/wireguard/<iface>.conf, 0600) in place. The
+            # interface name comes from the file name, so use the stored file
+            # (NixOS always has resolvconf, so no DNS-compat copy is needed).
+            script = f"{shlex.quote(_wg_quick())} up {shlex.quote(config_path)}"
+        else:
+            # Copy into /etc/wireguard/ first — Ubuntu's AppArmor profile for
+            # wg-quick only permits reading configs from that directory.
+            script = (
+                f"cp {shlex.quote(src_conf)} {shlex.quote(etc_conf)} && "
+                f"chmod 600 {shlex.quote(etc_conf)} && "
+                f"{shlex.quote(_wg_quick())} up {shlex.quote(iface)}"
+            )
         result = run_privileged_command(["sh", "-c", script])
         return result is not None and result.returncode == 0
     except Exception as e:
@@ -645,7 +696,7 @@ def setup_vpn_keys():
         return None
 
 
-def save_vpn_configuration(vpn_config_json, config_name="resistine"):
+def save_vpn_configuration(vpn_config_json, config_name="phoenix"):
     """
     Parse and save the VPN configuration.
     Returns the path to the saved config file if successful, None otherwise.
@@ -693,9 +744,9 @@ def save_vpn_configuration(vpn_config_json, config_name="resistine"):
             logger.info("VPN configuration saved successfully")
             return config_path
         else:
-            logger.warning(get_text("vpn.wireguard.vpn_functions_linux.failed_to_create_vpn_config"))
+            logger.warning("Failed to create VPN config")
             return None
 
     except Exception as e:
-        logger.warning(get_text("vpn.wireguard.vpn_functions_linux.error_creating_vpn_config_e", e=e))
+        logger.warning(f"Error creating VPN config: {e}")
         return None

@@ -8,7 +8,6 @@ import os
 import socket
 
 from utils.logger import logger
-from utils.i18n import get_text
 
 SERVICE_HOST = "127.0.0.1"
 SERVICE_PORT = 51888
@@ -33,7 +32,7 @@ def _load_ipc_token() -> str:
             return token
         logger.error("IPC token file is empty")
     except FileNotFoundError:
-        logger.warning(get_text("vpn.wireguard.service_client.ipc_token_file_not_found", _IPC_TOKEN_FILE=_IPC_TOKEN_FILE))
+        logger.warning(f"IPC token file not found at {_IPC_TOKEN_FILE} — is the VPN service installed?")
     except OSError as e:
         logger.error(f"Failed to load IPC token: {e}")
     # Fallback: allow override via environment (useful for CI / testing)
@@ -68,7 +67,7 @@ def send_command(command: str, tunnel: str, config_path: str = None) -> dict:
     """
     token = _load_ipc_token()
     if not token:
-        return {"status": "error", "state": "Stopped", "message": get_text("vpn.wireguard.service_client.ipc_token_unavailable_vpn_service")}
+        return {"status": "error", "state": "Stopped", "message": "IPC token unavailable — VPN service not installed"}
 
     payload = {
         "token": token,
@@ -96,10 +95,10 @@ def send_command(command: str, tunnel: str, config_path: str = None) -> dict:
 
     except ConnectionRefusedError:
         logger.error("VPN service is not running (connection refused)")
-        return {"status": "error", "state": "Stopped", "message": get_text("vpn.wireguard.service_client.vpn_service_not_running")}
+        return {"status": "error", "state": "Stopped", "message": "VPN service not running"}
     except socket.timeout:
-        logger.error(get_text("vpn.wireguard.service_client.vpn_service_timed_out"))
-        return {"status": "error", "state": "Stopped", "message": get_text("vpn.wireguard.service_client.vpn_service_timed_out")}
+        logger.error("VPN service timed out")
+        return {"status": "error", "state": "Stopped", "message": "VPN service timed out"}
     except Exception as e:
         logger.exception("Unexpected error communicating with VPN service")
         return {"status": "error", "state": "Stopped", "message": str(e)}

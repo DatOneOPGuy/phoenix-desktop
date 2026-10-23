@@ -27,7 +27,6 @@ from plugins.vpn.wireguard.config_validation import (
 # Import client functions so main.py can use check_service_status etc.
 # without importing from two places
 from plugins.vpn.wireguard.vpn_windows_client import get_status, connect, disconnect
-from utils.i18n import get_text
 
 
 # ----------------------------------------------------------------
@@ -148,7 +147,7 @@ def generate_wireguard_keys() -> dict | None:
             logger.info("WireGuard keys generated via wg.exe")
             return {"private_key": private_key, "public_key": public_key}
         except Exception as e:
-            logger.warning(get_text("vpn.wireguard.vpn_functions_windows.wg_exe_key_generation_failed", e=e))
+            logger.warning(f"wg.exe key generation failed: {e}")
 
     return None
 
@@ -168,7 +167,7 @@ def _generate_keys_fallback() -> dict | None:
             from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
             from cryptography.hazmat.primitives import serialization
         except ImportError:
-            logger.warning(get_text("vpn.wireguard.vpn_functions_windows.cryptography_library_not_available_for"))
+            logger.warning("cryptography library not available for key generation")
             return None
 
         private_key_bytes = secrets.token_bytes(32)
@@ -256,7 +255,7 @@ def setup_vpn_keys() -> str | None:
 
 def parse_and_create_vpn_config(
     vpn_config_json_string: str,
-    config_name: str = "resistine",
+    config_name: str = "phoenix",
 ) -> str | None:
     try:
         if not vpn_config_json_string:
@@ -354,7 +353,7 @@ def parse_and_create_vpn_config(
         conf_text = "\n".join(lines).strip() + "\n"
 
         if not conf_text.strip():
-            raise ValueError(get_text("vpn.wireguard.vpn_functions_windows.generated_wireguard_config_is_empty"))
+            raise ValueError("Generated WireGuard config is empty")
 
         config_dir = get_writable_wireguard_dir()
         os.makedirs(config_dir, exist_ok=True)
@@ -373,13 +372,13 @@ def parse_and_create_vpn_config(
         logger.error(f"Failed to parse VPN config JSON: {e}")
         return None
     except Exception as e:
-        logger.error(get_text("vpn.wireguard.vpn_functions_linux.error_creating_vpn_config_e", e=e))
+        logger.error(f"Error creating VPN config: {e}")
         return None
 
 
 def save_vpn_configuration(
     vpn_config_json: str,
-    config_name: str = "resistine",
+    config_name: str = "phoenix",
 ) -> str | None:
     """Alias for parse_and_create_vpn_config."""
     return parse_and_create_vpn_config(vpn_config_json, config_name)

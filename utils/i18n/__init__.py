@@ -1,5 +1,5 @@
 """
-Internationalization (i18n) module for Resistine.
+Internationalization (i18n) module for Phoenix.
 Provides centralized text storage and translation support for user-facing messages.
 
 Author: Petr and the Phoenix Team
@@ -16,52 +16,6 @@ TEXTS = {}
 
 # Default language
 DEFAULT_LANGUAGE = 'en'
-
-# Active language for get_text() when no explicit lang is passed.
-# Set at startup from the persisted "ui.language" setting via
-# set_language(); i18n itself must not import utils.settings
-# (utils.settings -> utils.encryption -> utils.i18n would be circular).
-_current_language = DEFAULT_LANGUAGE
-
-# Display names for the language picker in Settings.
-# Keys must match the utils/i18n/<code>.json file stems.
-LANGUAGE_NAMES = {
-    'en': 'English',
-    'es-ES': 'Español (España)',
-    'es-419': 'Español (Latinoamérica)',
-    'de-DE': 'Deutsch',
-    'cs-CZ': 'Čeština',
-    'fr-FR': 'Français',
-    'it-IT': 'Italiano',
-    'nl-NL': 'Nederlands',
-    'pt-BR': 'Português (Brasil)',
-    'ja-JP': '日本語',
-    'tr-TR': 'Türkçe',
-    'ar': 'العربية',
-    'uk-UA': 'Українська',
-}
-
-
-def set_language(lang):
-    """
-    Set the active language for get_text() calls without an explicit lang.
-
-    :param lang: Language code matching a loaded translation file
-                 (e.g. 'en', 'fr-FR'). Unknown codes fall back to the
-                 default language.
-    """
-    global _current_language
-    if lang in TEXTS:
-        _current_language = lang
-    else:
-        logger.warning(
-            f"i18n: unknown language '{lang}', using '{DEFAULT_LANGUAGE}'")
-        _current_language = DEFAULT_LANGUAGE
-
-
-def get_language():
-    """Return the active language code."""
-    return _current_language
 
 
 def load_language_files():
@@ -150,22 +104,18 @@ def load_plugin_i18n_dir(plugin_path, plugin_name):
             logger.error(f"Error loading plugin i18n from {json_file}: {e}")
 
 
-def get_text(key, lang=None, /, **kwargs):
-    # key/lang are positional-only so template placeholders named "key"
-    # or "lang" (e.g. utils.settings.value_for_namespace_key_is) can be
-    # passed as format kwargs without colliding with the parameters.
+def get_text(key, lang=None, **kwargs):
     """
     Get a translated text string with optional formatting.
     
     :param key: The text key in dot notation (e.g., 'encryption.insecure_backend')
-    :param lang: Language code (defaults to the active language set via
-                 set_language(), falling back to DEFAULT_LANGUAGE)
+    :param lang: Language code (defaults to DEFAULT_LANGUAGE)
     :param kwargs: Optional formatting parameters for the text template
     :return: The translated and formatted text string
     :raises KeyError: If the key is not found in the specified language
     """
     if lang is None:
-        lang = _current_language
+        lang = DEFAULT_LANGUAGE
     
     # Try requested language
     if lang in TEXTS and key in TEXTS[lang]:

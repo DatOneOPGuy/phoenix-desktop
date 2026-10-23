@@ -3,6 +3,8 @@ Version Helper — single source of truth for the current app version.
 
 Frozen (PyInstaller) builds: reads from the bundled VERSION file in _MEIPASS.
 Source / dev mode: parses VERSION = '...' from packaging/Resistine.spec.
+Frozen builds also carry a BUILD file (UTC YYYYMMDDHHMM) that tells builds of
+one VERSION apart; source runs have none.
 
 Author: Phoenix Team
 Copyright (c) Phoenix 2025
@@ -14,7 +16,6 @@ import re
 import sys
 
 from utils.logger import logger
-from utils.i18n import get_text
 
 _VERSION_RE = re.compile(r"^VERSION\s*=\s*['\"](.+?)['\"]", re.MULTILINE)
 
@@ -46,7 +47,7 @@ def get_current_version() -> str:
             if version:
                 return version
         except (OSError, IOError) as e:
-            logger.warning(get_text("utils.updates.version.version_could_not_read_bundled", e=e))
+            logger.warning(f"[VERSION] Could not read bundled VERSION file: {e}")
 
     # Source / dev mode — parse from spec
     spec_path = os.path.join(_PROJECT_ROOT, "packaging", "Resistine.spec")
@@ -57,8 +58,27 @@ def get_current_version() -> str:
         if match:
             return match.group(1)
     except (OSError, IOError) as e:
-        logger.warning(get_text("utils.updates.version.version_could_not_read_spec", e=e))
+        logger.warning(f"[VERSION] Could not read spec file: {e}")
     return "0.0.0"
+
+
+def get_build() -> str:
+    """Return this build's ID (UTC YYYYMMDDHHMM), or "" when running from source."""
+    if not getattr(sys, "frozen", False):
+        return ""
+    meipass = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+    try:
+        with open(os.path.join(meipass, "BUILD"), "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""  # a build from before build IDs
+
+
+def get_display_version() -> str:
+    """Version as shown to people: "2026.07.20-rc (build 202610221405)"."""
+    version = get_current_version()
+    build = get_build()
+    return f"{version} (build {build})" if build else version
 
 
 def compare_versions(current: str, remote: str) -> int:

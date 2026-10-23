@@ -95,7 +95,6 @@ if _system == "Darwin":
         open_fda_settings,
         open_login_items_settings,
         refresh_system_configs,
-        reveal_clamav_helper_in_finder,
         set_freshclam_daemon_enabled,
         system_clamd_conf_path,
         system_clamd_socket_path,

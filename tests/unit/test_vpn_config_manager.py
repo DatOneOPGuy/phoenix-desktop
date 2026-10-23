@@ -17,7 +17,7 @@ import platform
 import stat
 import pytest
 
-from plugins.vpn.config_manager import VPNConfigManager, RESISTINE_CONFIG_NAME
+from plugins.vpn.config_manager import VPNConfigManager, PHOENIX_CONFIG_NAME
 
 
 # ---------------------------------------------------------------------------
@@ -30,8 +30,8 @@ def mgr(wireguard_dir, isolated_settings):
 
 @pytest.fixture()
 def mgr_with_default(mgr, write_conf):
-    write_conf(RESISTINE_CONFIG_NAME)
-    mgr.register_config(RESISTINE_CONFIG_NAME, source="api")
+    write_conf(PHOENIX_CONFIG_NAME)
+    mgr.register_config(PHOENIX_CONFIG_NAME, source="api")
     return mgr
 
 
@@ -46,14 +46,14 @@ class TestListConfigs:
     def test_single_default_config(self, mgr_with_default):
         configs = mgr_with_default.list_configs()
         assert len(configs) == 1
-        assert configs[0]["name"] == RESISTINE_CONFIG_NAME
+        assert configs[0]["name"] == PHOENIX_CONFIG_NAME
 
     def test_resistine_sorted_first(self, mgr, write_conf, isolated_settings):
         write_conf("zzz_user")
-        write_conf(RESISTINE_CONFIG_NAME)
+        write_conf(PHOENIX_CONFIG_NAME)
         write_conf("aaa_user")
         configs = mgr.list_configs()
-        assert configs[0]["name"] == RESISTINE_CONFIG_NAME
+        assert configs[0]["name"] == PHOENIX_CONFIG_NAME
 
     def test_user_configs_sorted_alphabetically(self, mgr, write_conf):
         write_conf("charlie")
@@ -93,9 +93,9 @@ class TestGetActiveConfigName:
         assert mgr.get_active_config_name() == "my_vpn"
 
     def test_falls_back_to_resistine(self, mgr, write_conf, isolated_settings):
-        write_conf(RESISTINE_CONFIG_NAME)
+        write_conf(PHOENIX_CONFIG_NAME)
         # No active_config set in settings
-        assert mgr.get_active_config_name() == RESISTINE_CONFIG_NAME
+        assert mgr.get_active_config_name() == PHOENIX_CONFIG_NAME
 
     def test_falls_back_to_first_conf(self, mgr, write_conf, isolated_settings):
         write_conf("only_one")
@@ -103,10 +103,10 @@ class TestGetActiveConfigName:
 
     def test_ignores_stale_active_config(self, mgr, write_conf, isolated_settings):
         """If the saved active config file no longer exists, fall back."""
-        write_conf(RESISTINE_CONFIG_NAME)
+        write_conf(PHOENIX_CONFIG_NAME)
         isolated_settings.set("vpn", "active_config", "deleted_config")
-        # deleted_config.conf doesn't exist → should fall back to phoenix
-        assert mgr.get_active_config_name() == RESISTINE_CONFIG_NAME
+        # deleted_config.conf doesn't exist → should fall back to resistine
+        assert mgr.get_active_config_name() == PHOENIX_CONFIG_NAME
 
 
 # ===========================================================================
@@ -125,8 +125,8 @@ class TestSetActiveConfig:
         assert result is False
 
     def test_set_resistine(self, mgr, write_conf):
-        write_conf(RESISTINE_CONFIG_NAME)
-        result = mgr.set_active_config(RESISTINE_CONFIG_NAME)
+        write_conf(PHOENIX_CONFIG_NAME)
+        result = mgr.set_active_config(PHOENIX_CONFIG_NAME)
         assert result is True
 
 
@@ -136,11 +136,11 @@ class TestSetActiveConfig:
 @pytest.mark.unit
 class TestGetActiveConfigPath:
     def test_returns_full_path(self, mgr, write_conf, isolated_settings):
-        write_conf(RESISTINE_CONFIG_NAME)
-        isolated_settings.set("vpn", "active_config", RESISTINE_CONFIG_NAME)
+        write_conf(PHOENIX_CONFIG_NAME)
+        isolated_settings.set("vpn", "active_config", PHOENIX_CONFIG_NAME)
         path = mgr.get_active_config_path()
         assert path is not None
-        assert path.endswith(f"{RESISTINE_CONFIG_NAME}.conf")
+        assert path.endswith(f"{PHOENIX_CONFIG_NAME}.conf")
 
     def test_returns_none_when_no_configs(self, mgr):
         assert mgr.get_active_config_path() is None
@@ -184,9 +184,9 @@ class TestImportConfig:
 
     def test_cannot_import_as_resistine(self, mgr, sample_wireguard_conf):
         """Importing with the reserved name must be suffixed."""
-        ok, name = mgr.import_config(f"{RESISTINE_CONFIG_NAME}.conf", sample_wireguard_conf)
+        ok, name = mgr.import_config(f"{PHOENIX_CONFIG_NAME}.conf", sample_wireguard_conf)
         assert ok is True
-        assert name != RESISTINE_CONFIG_NAME
+        assert name != PHOENIX_CONFIG_NAME
 
     @pytest.mark.skipif(platform.system() == "Windows", reason="POSIX-only")
     def test_imported_file_permissions_600(self, mgr, sample_wireguard_conf, wireguard_dir):
@@ -218,8 +218,8 @@ class TestDeleteConfig:
         assert ok is True
 
     def test_refuses_to_delete_resistine(self, mgr, write_conf):
-        write_conf(RESISTINE_CONFIG_NAME)
-        ok, msg = mgr.delete_config(RESISTINE_CONFIG_NAME)
+        write_conf(PHOENIX_CONFIG_NAME)
+        ok, msg = mgr.delete_config(PHOENIX_CONFIG_NAME)
         assert ok is False
         assert "Cannot delete" in msg
 
@@ -230,7 +230,7 @@ class TestDeleteConfig:
         assert name not in registry
 
     def test_switches_active_config_on_delete(self, mgr, write_conf, isolated_settings):
-        write_conf(RESISTINE_CONFIG_NAME)
+        write_conf(PHOENIX_CONFIG_NAME)
         write_conf("secondary")
         mgr.set_active_config("secondary")
         mgr.delete_config("secondary")
@@ -261,8 +261,8 @@ class TestSanitizeFilename:
         assert result == "imported"
 
     def test_resistine_name_gets_user_suffix(self, mgr):
-        result = mgr.sanitize_filename(f"{RESISTINE_CONFIG_NAME}.conf")
-        assert result == f"{RESISTINE_CONFIG_NAME}_user"
+        result = mgr.sanitize_filename(f"{PHOENIX_CONFIG_NAME}.conf")
+        assert result == f"{PHOENIX_CONFIG_NAME}_user"
 
     def test_allows_hyphens(self, mgr):
         result = mgr.sanitize_filename("my-tunnel.conf")
@@ -282,7 +282,7 @@ class TestMigrateLegacyConfig:
         (wireguard_dir / "wg0.conf").write_text("[Interface]\n[Peer]\n")
         result = mgr.migrate_legacy_config()
         assert result is True
-        assert (wireguard_dir / f"{RESISTINE_CONFIG_NAME}.conf").exists()
+        assert (wireguard_dir / f"{PHOENIX_CONFIG_NAME}.conf").exists()
         assert not (wireguard_dir / "wg0.conf").exists()
 
     def test_skips_if_no_legacy_config(self, mgr, wireguard_dir):
@@ -291,7 +291,7 @@ class TestMigrateLegacyConfig:
 
     def test_skips_if_default_already_exists(self, mgr, wireguard_dir):
         (wireguard_dir / "wg0.conf").write_text("[Interface]\n")
-        (wireguard_dir / f"{RESISTINE_CONFIG_NAME}.conf").write_text("[Interface]\n")
+        (wireguard_dir / f"{PHOENIX_CONFIG_NAME}.conf").write_text("[Interface]\n")
         result = mgr.migrate_legacy_config()
         assert result is False
         # Original wg0 should still exist
@@ -301,7 +301,7 @@ class TestMigrateLegacyConfig:
     def test_migrated_file_permissions_600(self, mgr, wireguard_dir):
         (wireguard_dir / "wg0.conf").write_text("[Interface]\n[Peer]\n")
         mgr.migrate_legacy_config()
-        conf = wireguard_dir / f"{RESISTINE_CONFIG_NAME}.conf"
+        conf = wireguard_dir / f"{PHOENIX_CONFIG_NAME}.conf"
         mode = oct(stat.S_IMODE(os.stat(str(conf)).st_mode))
         assert mode == oct(0o600)
 
@@ -312,7 +312,7 @@ class TestMigrateLegacyConfig:
 @pytest.mark.unit
 class TestGetDisplayName:
     def test_default_config_display_name(self, mgr):
-        assert mgr.get_display_name(RESISTINE_CONFIG_NAME) == "Phoenix (Default)"
+        assert mgr.get_display_name(PHOENIX_CONFIG_NAME) == "Phoenix (Default)"
 
     def test_registered_config_display_name(self, mgr, isolated_settings):
         mgr.register_config("mycfg", source="import", display_name="My Config")
@@ -320,3 +320,50 @@ class TestGetDisplayName:
 
     def test_unregistered_config_uses_name(self, mgr):
         assert mgr.get_display_name("unknown_cfg") == "unknown_cfg"
+
+
+@pytest.mark.unit
+class TestRenameToPhoenix:
+    """The default config used to be resistine.conf (and before that wg0.conf)."""
+
+    def _mgr(self, tmp_path):
+        d = tmp_path / "wireguard"
+        d.mkdir()
+        return VPNConfigManager(str(d)), d
+
+    def test_resistine_conf_becomes_phoenix(self, tmp_path, isolated_settings):
+        mgr, d = self._mgr(tmp_path)
+        (d / "resistine.conf").write_text("[Interface]\n")
+        mgr.register_config("resistine", source="phoenix")
+        isolated_settings.set("vpn", "active_config", "resistine")
+
+        assert mgr.migrate_legacy_config() is True
+        assert (d / "phoenix.conf").read_text() == "[Interface]\n"
+        assert not (d / "resistine.conf").exists()
+        assert oct((d / "phoenix.conf").stat().st_mode & 0o777) == "0o600"
+        registry = isolated_settings.get("vpn", "config_registry", {})
+        assert "resistine" not in registry and registry["phoenix"]["source"] == "phoenix"
+        assert mgr.get_active_config_name() == "phoenix"
+        assert mgr.get_display_name("phoenix") == "Phoenix (Default)"
+
+    def test_wg0_still_migrates(self, tmp_path, isolated_settings):
+        mgr, d = self._mgr(tmp_path)
+        (d / "wg0.conf").write_text("[Interface]\n")
+        assert mgr.migrate_legacy_config() is True
+        assert (d / "phoenix.conf").exists() and not (d / "wg0.conf").exists()
+
+    def test_keeps_other_active_config(self, tmp_path, isolated_settings):
+        mgr, d = self._mgr(tmp_path)
+        (d / "resistine.conf").write_text("x")
+        (d / "office.conf").write_text("y")
+        isolated_settings.set("vpn", "active_config", "office")
+        assert mgr.migrate_legacy_config() is True
+        assert mgr.get_active_config_name() == "office"
+
+    def test_no_rename_when_phoenix_exists(self, tmp_path, isolated_settings):
+        mgr, d = self._mgr(tmp_path)
+        (d / "phoenix.conf").write_text("new")
+        (d / "resistine.conf").write_text("old")
+        assert mgr.migrate_legacy_config() is False
+        assert (d / "phoenix.conf").read_text() == "new"
+
