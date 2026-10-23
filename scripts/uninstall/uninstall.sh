@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# Resistine — Full Uninstaller (Linux)
+# Phoenix (formerly Resistine) — Full Uninstaller (Linux)
 # Removes the SIEM agent, VPN tunnels/configs, antivirus daemons,
 # privileged helpers, stored secrets, and all user data.
 #
@@ -49,11 +49,9 @@ USER_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
 # Honor XDG_CONFIG_HOME as the app does (utils/settings.get_config_dir). It is
 # preserved across the sudo re-exec via `sudo -E`; otherwise fall back to the
 # resolved home's .config (correct for the vast majority of setups).
-if [ -n "${XDG_CONFIG_HOME:-}" ]; then
-    CONFIG_DIR="$XDG_CONFIG_HOME/resistine"
-else
-    CONFIG_DIR="$USER_HOME/.config/resistine"
-fi
+# Both the Phoenix dir and the pre-rebrand resistine one.
+CONFIG_BASE="${XDG_CONFIG_HOME:-$USER_HOME/.config}"
+CONFIG_DIRS="$CONFIG_BASE/phoenix $CONFIG_BASE/resistine"
 
 # Project root: two levels up from scripts/uninstall/.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -69,10 +67,11 @@ step()  { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
 # --- Confirmation (before any escalation) -----------------------------------
 if [ "$ASSUME_YES" -ne 1 ]; then
-    printf '\033[1mResistine Full Uninstaller\033[0m\n'
+    printf '\033[1mPhoenix Full Uninstaller\033[0m\n'
     printf 'This removes the SIEM agent, VPN tunnels/configs, antivirus daemons,\n'
     printf 'privileged helpers, and all user data at:\n'
-    printf '  %s\n\n' "$CONFIG_DIR"
+    for d in $CONFIG_DIRS; do printf '  %s\n' "$d"; done
+    printf '\n'
     printf 'Continue? [y/N] '
     read -r reply
     case "$reply" in
@@ -100,15 +99,16 @@ sleep 1
 
 # ---- 2. VPN / WireGuard teardown ----
 step "[2/7] Removing VPN tunnels and configs..."
-WG_DIR="$CONFIG_DIR/wireguard"
-if [ -d "$WG_DIR" ]; then
+for CONFIG_DIR in $CONFIG_DIRS; do
+    WG_DIR="$CONFIG_DIR/wireguard"
+    [ -d "$WG_DIR" ] || continue
     for conf in "$WG_DIR"/*.conf; do
         [ -e "$conf" ] || continue
         iface="$(basename "$conf" .conf)"
         wg-quick down "$iface" 2>/dev/null && ok "Brought down tunnel: $iface" || true
         rm -f "/etc/wireguard/${iface}.conf"
     done
-fi
+done
 # Bring down a stray 'resistine' interface in case no config remained.
 wg-quick down resistine 2>/dev/null || true
 rm -f /etc/wireguard/resistine.conf
@@ -164,9 +164,11 @@ ok "Helpers and polkit policies removed"
 
 # ---- 6. Desktop integration ----
 step "[6/7] Removing desktop entries..."
-rm -f "$USER_HOME/.local/share/applications/resistine.desktop" \
-      "$USER_HOME/.config/autostart/resistine.desktop" \
-      /usr/share/applications/resistine.desktop
+for id in phoenix resistine; do
+    rm -f "$USER_HOME/.local/share/applications/$id.desktop" \
+          "$USER_HOME/.config/autostart/$id.desktop" \
+          "/usr/share/applications/$id.desktop"
+done
 ok "Desktop entries removed (if any)"
 
 # ---- 7. User data (secrets + config) — run as the real user ----
@@ -175,19 +177,23 @@ run_as_user() { sudo -u "$REAL_USER" env HOME="$USER_HOME" "$@"; }
 
 # Keyring master key (best-effort; secret-tool from libsecret).
 if command -v secret-tool >/dev/null 2>&1; then
-    run_as_user secret-tool clear service resistine-master-key username master-key 2>/dev/null \
-        && ok "Removed keyring master key" || info "No keyring entry (or no active keyring)"
+    for svc in phoenix-master-key resistine-master-key; do
+        run_as_user secret-tool clear service "$svc" username master-key 2>/dev/null \
+            && ok "Removed keyring master key $svc" || info "No keyring entry $svc (or no active keyring)"
+    done
 else
-    info "secret-tool not available — skipping keyring (delete 'resistine-master-key' manually if needed)"
+    info "secret-tool not available — skipping keyring (delete 'phoenix-master-key' / 'resistine-master-key' manually if needed)"
 fi
 
 # App config dir (settings, secrets, VPN keys, Wazuh key backup).
-if [ -d "$CONFIG_DIR" ]; then
-    rm -rf "$CONFIG_DIR"
-    ok "Removed $CONFIG_DIR"
-else
-    info "Config dir not found: $CONFIG_DIR"
-fi
+for CONFIG_DIR in $CONFIG_DIRS; do
+    if [ -d "$CONFIG_DIR" ]; then
+        rm -rf "$CONFIG_DIR"
+        ok "Removed $CONFIG_DIR"
+    else
+        info "Config dir not found: $CONFIG_DIR"
+    fi
+done
 
 # Project virtual environment.
 if [ "$KEEP_VENV" -ne 1 ] && [ -d "$PROJECT_ROOT/.venv" ]; then
@@ -195,5 +201,5 @@ if [ "$KEEP_VENV" -ne 1 ] && [ -d "$PROJECT_ROOT/.venv" ]; then
     ok "Removed $PROJECT_ROOT/.venv"
 fi
 
-printf '\n\033[0;32mResistine has been uninstalled.\033[0m\n'
+printf '\n\033[0;32mPhoenix has been uninstalled.\033[0m\n'
 printf 'Note: the application source at %s was left in place.\n' "$PROJECT_ROOT"

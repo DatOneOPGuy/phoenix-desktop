@@ -239,7 +239,9 @@ def send(title: str, body: str, urgency: str = "normal", on_click=None):
         # Both paths failed — surface it so a silent miss is diagnosable.
         from utils.i18n import get_text
         logger.warning(
-            get_text("utils.notifications.linux.desktop_notification_not_delivered_d"),
+            "Desktop notification not delivered — D-Bus failed (%s) and "
+            "notify-send is unavailable. Install libnotify-bin or ensure a "
+            "notification daemon + session bus are running.",
             dbus_err,
         )
 

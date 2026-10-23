@@ -24,7 +24,6 @@ from PyQt6.QtWidgets import (
     QTextBrowser,
     QVBoxLayout,
 )
-from utils.i18n import get_text
 
 
 class UpdateDialog(QDialog):
@@ -41,7 +40,7 @@ class UpdateDialog(QDialog):
         self._new_version = new_version
         self.cancelled = False
 
-        self.setWindowTitle(get_text("gui.update_dialog.software_update"))
+        self.setWindowTitle("Software Update")
         self.setMinimumWidth(480)
         self.setModal(True)
 
@@ -49,11 +48,12 @@ class UpdateDialog(QDialog):
         self._layout.setContentsMargins(24, 24, 24, 24)
         self._layout.setSpacing(12)
 
-        title = QLabel(get_text("gui.update_dialog.a_new_version_of_resistine"))
+        title = QLabel("A new version of Phoenix is available")
         title.setObjectName("H2")
         self._layout.addWidget(title)
         self._layout.addWidget(QLabel(
-            get_text("gui.update_dialog.resistine_new_version_is_now", new_version=new_version, current_version=current_version)))
+            f"Phoenix {new_version} is now available — you have "
+            f"{current_version}. Would you like to install it now?"))
 
         notes = QTextBrowser()
         notes.setOpenExternalLinks(True)
@@ -85,13 +85,13 @@ class UpdateDialog(QDialog):
 
     def _show_prompt_buttons(self):
         self._clear_buttons()
-        skip = QPushButton(get_text("gui.update_dialog.skip_this_version"))
+        skip = QPushButton("Skip This Version")
         skip.setObjectName("Secondary")
         skip.clicked.connect(self._handle_skip)
-        later = QPushButton(get_text("gui.update_dialog.remind_me_later"))
+        later = QPushButton("Remind Me Later")
         later.setObjectName("Secondary")
         later.clicked.connect(self._handle_later)
-        install = QPushButton(get_text("gui.update_dialog.install_update"))
+        install = QPushButton("Install Update")
         install.clicked.connect(self._handle_install)
         self._buttons.addWidget(skip)
         self._buttons.addStretch(1)
@@ -103,7 +103,7 @@ class UpdateDialog(QDialog):
         self._progress.show()
         self._progress.setValue(0)
         self._status.show()
-        cancel = QPushButton(get_text("dialog.password.button.cancel"))
+        cancel = QPushButton("Cancel")
         cancel.setObjectName("Secondary")
         cancel.clicked.connect(self._handle_cancel)
         self._buttons.addStretch(1)
@@ -137,10 +137,10 @@ class UpdateDialog(QDialog):
 
     def show_restart_prompt(self):
         self._progress.hide()
-        self._status.setText(get_text("gui.update_dialog.update_downloaded_restart_to_apply"))
+        self._status.setText("Update downloaded. Restart to apply.")
         self._status.show()
         self._clear_buttons()
-        restart = QPushButton(get_text("gui.update_dialog.restart_now"))
+        restart = QPushButton("Restart Now")
         restart.clicked.connect(self._handle_restart)
         self._buttons.addStretch(1)
         self._buttons.addWidget(restart)
@@ -156,12 +156,12 @@ class UpdateDialog(QDialog):
         self._status.setStyleSheet("color: #DC2626;")
         self._status.show()
         self._clear_buttons()
-        close = QPushButton(get_text("gui.update_dialog.close"))
+        close = QPushButton("Close")
         close.setObjectName("Secondary")
         close.clicked.connect(self.close)
         self._buttons.addStretch(1)
         if on_retry:
-            retry = QPushButton(get_text("gui.update_dialog.retry"))
+            retry = QPushButton("Retry")
             retry.clicked.connect(
                 lambda: (self._show_prompt_buttons(), on_retry()))
             self._buttons.addWidget(retry)

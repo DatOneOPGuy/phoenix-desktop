@@ -20,20 +20,20 @@ class TestConfigDirPerPlatform:
         with patch("utils.settings.platform.system", return_value="Darwin"):
             from utils.settings import get_config_dir
             path = get_config_dir()
-        assert "Library/Application Support/Resistine" in path
+        assert "Library/Application Support/Phoenix" in path
 
     def test_windows_config_dir(self):
         with patch("utils.settings.platform.system", return_value="Windows"):
             with patch.dict(os.environ, {"APPDATA": r"C:\Users\Test\AppData\Roaming"}):
                 from utils.settings import get_config_dir
                 path = get_config_dir()
-        assert "Resistine" in path
+        assert "Phoenix" in path
 
     def test_linux_config_dir(self):
         with patch("utils.settings.platform.system", return_value="Linux"):
             from utils.settings import get_config_dir
             path = get_config_dir()
-        assert ".config/resistine" in path
+        assert ".config/phoenix" in path
 
     def test_darwin_path_is_absolute(self):
         with patch("utils.settings.platform.system", return_value="Darwin"):
@@ -93,17 +93,17 @@ class TestVPNConfigManagerCrossPlatform:
 # Wazuh: architecture mapping
 # ===========================================================================
 class TestWazuhArchMapping:
-    @pytest.mark.parametrize("machine,expected_arch", [
-        ("arm64", "arm64"),
-        ("x86_64", "intel64"),
-        ("unknown", "arm64"),  # fallback
+    @pytest.mark.parametrize("machine,expected", [
+        ("arm64", "/packages/macos-arm64/current/manifest.json"),
+        ("x86_64", None),  # Phoenix builds the macOS agent for Apple Silicon only
     ])
-    @patch("plugins.wazuh.agent.wazuh_functions_darwin.platform.machine")
-    def test_package_url_arch(self, mock_machine, machine, expected_arch):
+    @patch("plugins.wazuh.agent.phoenix_packages.platform.system", return_value="Darwin")
+    @patch("plugins.wazuh.agent.phoenix_packages.platform.machine")
+    def test_package_url_arch(self, mock_machine, _system, machine, expected):
         mock_machine.return_value = machine
         from plugins.wazuh.agent.wazuh_functions_darwin import get_package_url
         url = get_package_url()
-        assert expected_arch in url
+        assert (url is None) if expected is None else url.endswith(expected)
 
 
 # ===========================================================================

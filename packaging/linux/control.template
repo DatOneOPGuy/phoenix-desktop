@@ -3,7 +3,7 @@ Version: ${VERSION}
 Section: utils
 Priority: optional
 Architecture: amd64
-Depends: wireguard-tools, libxcb-cursor0
+Depends: wireguard-tools, libxcb-cursor0, libxcb1, libgl1, libegl1, libwayland-client0, libwayland-cursor0, libwayland-egl1, fontconfig
 Conflicts: resistine
 Replaces: resistine
 Provides: resistine

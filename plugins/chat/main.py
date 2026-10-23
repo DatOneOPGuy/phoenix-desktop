@@ -93,7 +93,7 @@ _ARRIVE_MS = 200
 def _tls_verify() -> str | bool:
     """httpx ``verify`` value for the HTTPS chat endpoint.
 
-    The dashboard's certificate is signed either by the internal Phoenix
+    The dashboard's certificate is signed either by the internal Resistine
     root CA (leaf-only, no intermediate) or by the Cloudflare Origin CA
     (*.phoenix.exposed). Neither is in certifi, so the app ships both roots
     in ``resources/certs/chat-ca-bundle.pem``. Resolution order:
@@ -413,9 +413,7 @@ class _Bubble(QFrame):
         if self._thinking and text:
             self._end_thinking()
         try:
-            self._view.setHtml(
-                markdown_to_html(text, allow_html=not self._untrusted)
-                if text else "")
+            self._view.setHtml(markdown_to_html(text) if text else "")
         except RuntimeError:
             # Browser deleted mid-stream (session switched / chat torn down).
             return
@@ -582,6 +580,40 @@ class _AlertBridge(QObject):
     signal is emitted there and delivered queued to the GUI-thread slot)."""
 
     arrived = pyqtSignal(dict)
+
+
+# The AI server recognises this opening and answers from the pasted alert
+# without looking anything up (Resistine-LLMAgent-api, alert_explain.py).
+ALERT_QUESTION = ("Explain this Phoenix SIEM alert in plain words: what happened, "
+                  "how serious it is, and what I should do now.")
+
+
+def alert_question(body: str, ts=None, limit: int = 8000) -> str:
+    """The "Ask AI" message for one alert: instructions, when and where, then the text."""
+    import time
+
+    from plugins.dashboard import alerts as recent_alerts
+
+    text = (body or "").strip()
+    if len(text) > limit:
+        text = text[:limit] + "\n…(alert shortened)"
+    info = recent_alerts.parse(text)
+    about = []
+    if ts:
+        about.append("was sent " + time.strftime("%d %b %Y %H:%M", time.localtime(ts)))
+    if info["host"]:
+        agent = f" (agent {info['agent']})" if info["agent"] else ""
+        about.append(f"is about the machine {info['host']}{agent}")
+    context = f"The alert {' and '.join(about)}. " if about else ""
+    return (
+        f"{ALERT_QUESTION}\n"
+        "Answer only from the alert text below; don't look up other alerts. "
+        f"{context}"
+        "Write for someone who isn't a security expert, in a few short paragraphs. "
+        "Don't copy the triage verdict word for word, and don't guess numbers "
+        "the text doesn't give.\n\n"
+        f"--- alert ---\n{text}\n--- end of alert ---"
+    )
 
 
 def _alert_markdown(alert: dict) -> str:
@@ -1230,14 +1262,14 @@ class Plugin(BasePlugin):
                 md="**🚨 SIEM alerts**\n\nNo alerts yet. Alerts about machines you own "
                    "will appear here.")
         for alert in alerts:
-            self._add_assistant_bubble(md=_alert_markdown(alert), untrusted=True)
+            self._add_assistant_bubble(md=_alert_markdown(alert))
         siem_alerts.store().mark_read()
         self._refresh_sidebar()
         self._sync_input_enabled()
 
     _ASK_LIMIT = 8000  # characters of alert text sent with "Ask AI"
 
-    def ask_about_alert(self, body: str) -> bool:
+    def ask_about_alert(self, body: str, ts=None) -> bool:
         """Start a new chat asking Phoenix AI about one SIEM alert (the
         Dashboard's alert page). False when the AI is not set up."""
         if self.client is None:
@@ -1245,12 +1277,7 @@ class Plugin(BasePlugin):
         if getattr(self, "chat_entry", None) is None:
             return False
         self._new_chat()
-        text = (body or "").strip()
-        if len(text) > self._ASK_LIMIT:
-            text = text[: self._ASK_LIMIT] + "\n…(alert shortened)"
-        self._use_suggestion(
-            "Explain this Phoenix SIEM alert in plain words: what happened, how "
-            "serious it is, and what I should do now.\n\n" + text)
+        self._use_suggestion(alert_question(body, ts, self._ASK_LIMIT))
         return True
 
     def _on_alert_arrived(self, alert: dict) -> None:
@@ -1266,7 +1293,7 @@ class Plugin(BasePlugin):
             pass
         try:
             if self._viewing_alerts and getattr(self, "_messages_lay", None) is not None:
-                self._add_assistant_bubble(md=_alert_markdown(alert), untrusted=True)
+                self._add_assistant_bubble(md=_alert_markdown(alert))
                 siem_alerts.store().mark_read()
             self._refresh_sidebar()
         except RuntimeError:

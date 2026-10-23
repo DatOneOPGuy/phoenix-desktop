@@ -29,7 +29,7 @@ API_URL = "https://api.phoenix.exposed"
 _TIMEOUT = 20
 # The server-issued config uses the config manager's built-in name, so the
 # VPN screen shows it as "Phoenix (Default)".
-CONFIG_NAME = "resistine"
+from plugins.vpn.config_manager import PHOENIX_CONFIG_NAME as CONFIG_NAME  # noqa: E402
 
 
 class ProvisioningError(Exception):
@@ -164,7 +164,11 @@ def ensure_vpn_config(on_status: Optional[Callable[[str], None]] = None,
         on_status("Getting your VPN configuration…")
     cfg = request_peer(public_key)
 
+    from utils import http_trace
+    http_trace.event("VPN keypair generated locally; only the public key is sent",
+                     {"public_key": public_key})
     path = backend.save_vpn_configuration(cfg, CONFIG_NAME)
+    http_trace.event("VPN config written", {"path": path, "config": cfg})
     if not path:
         raise ProvisioningError(
             "The VPN config from the Phoenix service was rejected as invalid.")

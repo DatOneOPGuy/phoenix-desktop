@@ -19,7 +19,6 @@ import subprocess
 import time
 
 from utils.logger import logger
-from utils.i18n import get_text
 
 
 # ── Distro detection (local; avoids depending on utils.distro) ───
@@ -68,6 +67,20 @@ def _is_fedora_like() -> bool:
 
 def _is_arch_like() -> bool:
     return _distro_id() == "arch" or "arch" in _distro_id_like()
+
+
+def _is_nixos() -> bool:
+    return _distro_id() == "nixos"
+
+
+# NixOS builds /etc and the systemd units from the system configuration:
+# the app can't install packages, write clamd.conf or `systemctl enable`.
+_NIXOS_HINT = (
+    "On NixOS the ClamAV services come from your system configuration. Add "
+    "services.clamav.daemon.enable = true; services.clamav.updater.enable = true; "
+    "(and services.clamav.clamonacc.enable = true; for real-time protection), "
+    "run nixos-rebuild switch, then try again."
+)
 
 
 def _has_systemd() -> bool:
@@ -121,6 +134,19 @@ def _run_privileged(command: list[str], timeout: int = 300) -> tuple[bool, str]:
 
     Returns ``(success, combined_output)``.
     """
+    if os.geteuid() == 0:
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return False, "Command timed out."
+        except Exception as exc:
+            return False, str(exc)
+        if result.returncode == 0:
+            return True, (result.stdout or "").strip()
+        return False, (result.stderr or result.stdout or "").strip() or (
+            f"exited with code {result.returncode}"
+        )
+
     if shutil.which("pkexec"):
         try:
             executable = shutil.which(command[0]) or command[0]
@@ -137,11 +163,11 @@ def _run_privileged(command: list[str], timeout: int = 300) -> tuple[bool, str]:
                 "Falling back to sudo.",
             )
         except FileNotFoundError:
-            logger.warning(get_text("antivirus.clamav_platform_linux.clamav_pkexec_not_found_falling"))
+            logger.warning("ClamAV: pkexec not found, falling back to sudo")
         except subprocess.TimeoutExpired:
             return False, "pkexec timed out."
         except Exception as exc:  # pragma: no cover — defensive
-            logger.warning(get_text("antivirus.clamav_platform_linux.clamav_pkexec_error_exc", exc=exc))
+            logger.warning(f"ClamAV: pkexec error: {exc}")
 
     try:
         from gui.dialogs import CTkPasswordDialog
@@ -149,8 +175,8 @@ def _run_privileged(command: list[str], timeout: int = 300) -> tuple[bool, str]:
         return False, "GUI password dialog unavailable."
 
     dialog = CTkPasswordDialog(
-        title=get_text("antivirus.clamav_platform_linux.authentication_required"),
-        text=get_text("antivirus.clamav_platform_linux.enter_password_to_configure_antivirus"),
+        title="Authentication Required",
+        text="Enter password to configure antivirus protection:",
     )
     password = dialog.get_input()
     if not password:
@@ -588,30 +614,41 @@ def activate_system_daemons() -> tuple[bool, str]:
             "init system (OpenRC, runit, etc.)."
         )
 
-    installed_ok, install_msg = _install_packages_if_missing()
-    if not installed_ok:
-        return False, install_msg
-
     clamd_svc, fresh_svc, onacc_svc = _service_names()
 
-    prep = _prepare_config_script()
-    # Freshclam first so the DB exists before clamd loads. clamonacc is
-    # best-effort (not all distros package it yet).  We use ``enable`` +
-    # ``restart`` (instead of ``enable --now``) so that re-running Start
-    # Protection picks up any config changes we just wrote in `prep` —
-    # e.g. the newly-added LocalSocketMode line.  ``restart`` is
-    # idempotent: it starts the service if it's stopped, and bounces it
-    # if it's running.
-    script = (
-        f"{prep}; "
-        f"systemctl daemon-reload; "
-        f"systemctl enable {fresh_svc} 2>/dev/null || true; "
-        f"systemctl restart {fresh_svc} 2>/dev/null || true; "
-        f"systemctl enable {clamd_svc}; "
-        f"systemctl restart {clamd_svc}; "
-        f"systemctl enable {onacc_svc} 2>/dev/null || true; "
-        f"systemctl restart {onacc_svc} 2>/dev/null || true"
-    )
+    if _is_nixos():
+        # Units exist only when services.clamav is enabled; then just start
+        # them (enabling is the system config's job).
+        if not _systemctl_has_unit(clamd_svc):
+            return False, _NIXOS_HINT
+        script = (
+            f"systemctl start {fresh_svc} 2>/dev/null || true; "
+            f"systemctl start {clamd_svc}; "
+            f"systemctl start {onacc_svc} 2>/dev/null || true"
+        )
+    else:
+        installed_ok, install_msg = _install_packages_if_missing()
+        if not installed_ok:
+            return False, install_msg
+
+        prep = _prepare_config_script()
+        # Freshclam first so the DB exists before clamd loads. clamonacc is
+        # best-effort (not all distros package it yet).  We use ``enable`` +
+        # ``restart`` (instead of ``enable --now``) so that re-running Start
+        # Protection picks up any config changes we just wrote in `prep` —
+        # e.g. the newly-added LocalSocketMode line.  ``restart`` is
+        # idempotent: it starts the service if it's stopped, and bounces it
+        # if it's running.
+        script = (
+            f"{prep}; "
+            f"systemctl daemon-reload; "
+            f"systemctl enable {fresh_svc} 2>/dev/null || true; "
+            f"systemctl restart {fresh_svc} 2>/dev/null || true; "
+            f"systemctl enable {clamd_svc}; "
+            f"systemctl restart {clamd_svc}; "
+            f"systemctl enable {onacc_svc} 2>/dev/null || true; "
+            f"systemctl restart {onacc_svc} 2>/dev/null || true"
+        )
     ok, out = _run_privileged(["sh", "-c", script], timeout=600)
     if not ok:
         return False, out or "Failed to enable ClamAV services."
@@ -632,7 +669,8 @@ def activate_system_daemons() -> tuple[bool, str]:
                 time.sleep(0.5)
             else:
                 logger.warning(
-                    get_text("antivirus.clamav_platform_linux.clamav_clamonacc_not_running_after"),
+                    "ClamAV: clamonacc not running after activation — "
+                    "real-time protection may not be available on this distro.",
                 )
             return True, "Protection activated."
 

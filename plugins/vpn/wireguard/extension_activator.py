@@ -1,4 +1,5 @@
 import logging
+import time
 from Foundation import NSObject, NSOperationQueue
 from SystemExtensions import OSSystemExtensionRequest, OSSystemExtensionManager
 

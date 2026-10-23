@@ -9,7 +9,6 @@ Licensed under the GNU General Public License v2 or later
 
 import json
 import os
-import platform
 import re
 import shlex
 import socket
@@ -20,21 +19,18 @@ import time
 from utils import settings
 from utils.logger import logger
 
+from plugins.wazuh.agent import enrollment, phoenix_packages
 from plugins.wazuh.config import (
-    WAZUH_BASE_URL,
     WAZUH_ENV_FILE,
     WAZUH_INSTALL_DIR,
     WAZUH_LAUNCHD_PLIST,
     WAZUH_MANAGER,
     WAZUH_MANAGER_PORT,
-    WAZUH_PKG_ARCH_MAP,
     WAZUH_PKG_ENV_FILE,
     WAZUH_PROTOCOL,
     WAZUH_REGISTRATION_PORT,
-    WAZUH_VERSION,
     get_wazuh_env_file,
 )
-from utils.i18n import get_text
 
 _WAZUH_CONTROL = f"{WAZUH_INSTALL_DIR}/bin/wazuh-control"
 
@@ -55,7 +51,7 @@ def _get_hardware_uuid():
                 # Line format: "IOPlatformUUID" = "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
                 return line.split('"')[-2]
     except Exception as e:
-        logger.warning(get_text("wazuh.agent.wazuh_functions_darwin.could_not_read_hardware_uuid", e=e))
+        logger.warning(f"Could not read hardware UUID: {e}")
     return None
 
 
@@ -82,24 +78,13 @@ def get_agent_name():
     # name.  Wazuh allows: alphanumerics, hyphens, underscores, dots.
     name = re.sub(r"[^A-Za-z0-9.\-_]", "", name)
     if not name:
-        raise ValueError(get_text("wazuh.agent.wazuh_functions_darwin.agent_name_is_empty_after", hostname=repr(hostname)))
+        raise ValueError(f"Agent name is empty after sanitizing hostname: {hostname!r}")
     return name
 
 
 def get_agent_group():
-    """Return the user's email (sanitized) as the agent group.
-
-    Replaces '@' with '-' to match the canonical group name created by
-    the /verify-otp backend.  Falls back to 'default' if no email is
-    stored.
-    """
-    import re
-
-    email = settings.get("auth", "email", "default")
-    if email and email != "default":
-        raw = email.replace("@", "-")
-        return re.sub(r"[^A-Za-z0-9.\-_]", "", raw) or "default"
-    return "default"
+    """The Wazuh group of this user's agents (u_<Matrix localpart>)."""
+    return enrollment.agent_group()
 
 
 def needs_reenrollment():
@@ -120,17 +105,14 @@ _RESISTINE_API_BASE = "https://validate.resistine.work"
 
 
 def get_package_url():
-    """Build the full .pkg download URL from config constants + architecture."""
-    arch = platform.machine()
-    arch_suffix = WAZUH_PKG_ARCH_MAP.get(arch, "arm64")
-    filename = f"wazuh-agent-{WAZUH_VERSION}.{arch_suffix}.pkg"
-    return f"{WAZUH_BASE_URL}/{filename}"
+    """Manifest URL of the Phoenix agent .pkg, or None (built for arm64 only)."""
+    return phoenix_packages.manifest_url()
 
 
 def is_agent_installed():
     """Check whether the Wazuh agent is installed.
 
-    The agent's /Library/Ossec/ directory is root-owned and not readable by
+    The agent's /Library/Phoenix/ directory is root-owned and not readable by
     normal users, so checking for files inside it returns False even when
     they exist.  Instead we check for the directory itself (os.path.isdir
     succeeds without read permission) or the launchd plist which is
@@ -147,7 +129,7 @@ def get_agent_status():
     via wazuh-control instead of launchd).
     """
     if not is_agent_installed():
-        return get_text("antivirus.not_installed")
+        return "Not Installed"
 
     # Check launchd service first
     try:
@@ -160,7 +142,7 @@ def get_agent_status():
         if result.returncode == 0 and "state = running" in result.stdout:
             return "Running"
     except Exception as e:
-        logger.warning(get_text("wazuh.agent.wazuh_functions_darwin.could_not_query_launchd_for", e=e))
+        logger.warning(f"Could not query launchd for Wazuh agent: {e}")
 
     # Fallback: check if wazuh-agentd process is running (covers
     # agents started via wazuh-control instead of launchd)
@@ -173,7 +155,7 @@ def get_agent_status():
         if result.returncode == 0:
             return "Running"
     except Exception as e:
-        logger.warning(get_text("wazuh.agent.wazuh_functions_darwin.could_not_check_wazuh_agentd", e=e))
+        logger.warning(f"Could not check wazuh-agentd process: {e}")
 
     return "Stopped"
 
@@ -251,40 +233,20 @@ def _run_privileged(script, timeout=120):
 
 
 def download_package(progress_callback=None, output_path=None):
-    """Download the Wazuh .pkg using curl.
+    """Download the signed Phoenix agent .pkg (needs a Phoenix sign-in).
 
-    If output_path is given, downloads directly to that location (creating
-    parent dirs as needed).  Otherwise uses a temporary directory.
+    If output_path is given, downloads to that location (creating parent dirs
+    as needed), with its signed manifest saved next to it so
+    phoenix_packages.verify_cached() can re-check it later. Otherwise uses a
+    temporary directory.
 
-    Returns the local path on success, or None on failure.
+    Returns the verified local path on success, or None on failure.
     """
-    url = get_package_url()
     if output_path:
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        pkg_path = output_path
+        dest_dir, filename = os.path.dirname(output_path), os.path.basename(output_path)
     else:
-        tmp_dir = tempfile.mkdtemp(prefix="wazuh_")
-        pkg_path = os.path.join(tmp_dir, "wazuh-agent.pkg")
-
-    if progress_callback:
-        progress_callback("Downloading Wazuh agent...")
-
-    logger.info(f"Downloading Wazuh package from {url}")
-    try:
-        result = subprocess.run(
-            ["/usr/bin/curl", "-fSL", "--proto", "=https", "-o", pkg_path, url],
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-        if result.returncode != 0:
-            logger.error(f"curl failed: {result.stderr}")
-            return None
-        logger.info(f"Downloaded to {pkg_path}")
-        return pkg_path
-    except Exception as e:
-        logger.error(f"Download error: {e}")
-        return None
+        dest_dir, filename = tempfile.mkdtemp(prefix="phoenix_agent_"), "phoenix-agent.pkg"
+    return phoenix_packages.download_or_none(dest_dir, progress_callback, filename=filename)
 
 
 def _env_file_content(agent_name, agent_group):
@@ -360,7 +322,7 @@ def start_agent():
 
     parts = []
     # Restore client.keys from backup if it's missing — checked unprivileged
-    # first (backup lives outside /Library/Ossec/ so is always readable).
+    # first (backup lives outside /Library/Phoenix/ so is always readable).
     if os.path.exists(_KEY_BACKUP):
         parts.append(
             f"if [ ! -s {_sh(_CLIENT_KEYS)} ]; then "
@@ -470,7 +432,7 @@ def stop_agent():
 
     ``launchctl bootstrap`` does NOT adopt already-running processes,
     so bootout alone cannot kill orphaned daemons.  ``wazuh-control stop``
-    reads the PID files in /Library/Ossec/var/run/ and sends SIGTERM
+    reads the PID files in /Library/Phoenix/var/run/ and sends SIGTERM
     directly to each daemon, which handles both cases reliably.
     """
     if not is_agent_installed():
@@ -495,8 +457,8 @@ def stop_agent():
 
     # Verify processes are actually gone
     if _has_running_processes():
-        logger.warning(get_text("wazuh.agent.wazuh_functions_darwin.wazuh_processes_still_running_after"))
-        kill_script = "pkill -9 -f '/Library/Ossec/bin/wazuh-' 2>/dev/null; true"
+        logger.warning("Wazuh processes still running after stop, force-killing")
+        kill_script = "pkill -9 -f '/Library/Phoenix/bin/wazuh-' 2>/dev/null; true"
         _run_privileged(kill_script)
 
     stopped = not _has_running_processes()
@@ -519,10 +481,10 @@ _KC_ACCOUNT = "client_key"
 
 
 def remove_agent(wipe_keys: bool = False):
-    """Stop the Wazuh agent and remove /Library/Ossec/ with admin privileges.
+    """Stop the Wazuh agent and remove /Library/Phoenix/ with admin privileges.
 
     By default, the agent's client.keys is backed up to a persistent location
-    outside /Library/Ossec/ before the install directory is wiped, so a later
+    outside /Library/Phoenix/ before the install directory is wiped, so a later
     reinstall can restore the manager-issued key and skip re-enrollment.
 
     When ``wipe_keys=True`` (used on user logout) the backup file and System
@@ -559,7 +521,7 @@ def remove_agent(wipe_keys: bool = False):
     script = (
         f"launchctl bootout system {_sh(WAZUH_LAUNCHD_PLIST)} 2>/dev/null; "
         f"{_sh(_WAZUH_CONTROL)} stop 2>/dev/null; "
-        f"pkill -9 -f '/Library/Ossec/bin/wazuh-' 2>/dev/null; "
+        f"pkill -9 -f '/Library/Phoenix/bin/wazuh-' 2>/dev/null; "
         f"{key_phase}"
         f"rm -rf {_sh(WAZUH_INSTALL_DIR)}; "
         f"rm -f {_sh(WAZUH_LAUNCHD_PLIST)}"
@@ -591,23 +553,34 @@ def reenroll_agent():
     base = get_agent_name()
     new_name = f"{base}-{str(int(time.time()))[-6:]}"
     group = get_agent_group()
+    # The Phoenix API answers with the manager's current key for this device
+    # (a new agent if the old one was deleted there); else agent-auth.
+    enrolled = enrollment.request(new_name)
+    if enrolled:
+        new_name = enrolled.agent_name
+        group = enrolled.group
     # new_name also lands unquoted inside a sed expression below.
     if not (_SAFE_TOKEN_RE.match(new_name) and _SAFE_TOKEN_RE.match(group)):
+        enrollment.discard(enrolled)
         return (False, "Unsafe agent name or group")
     agent_auth = f"{WAZUH_INSTALL_DIR}/bin/agent-auth"
     ossec_conf = f"{WAZUH_INSTALL_DIR}/etc/ossec.conf"
+    if enrolled:
+        register = enrollment.key_write_sh(enrolled.key_file, _CLIENT_KEYS)
+    else:
+        # Register a brand-new agent identity (matches the postinstall flags).
+        register = f"{_sh(agent_auth)} -m {_sh(WAZUH_MANAGER)} -A {_sh(new_name)} -G {_sh(group)} 2>&1"
 
     script = (
         # Stop cleanly so the new key is what gets loaded on restart.
         f"launchctl bootout system {_sh(WAZUH_LAUNCHD_PLIST)} 2>/dev/null; "
         f"{_sh(_WAZUH_CONTROL)} stop 2>/dev/null; "
-        f"pkill -9 -f '/Library/Ossec/bin/wazuh-' 2>/dev/null; "
+        f"pkill -9 -f '/Library/Phoenix/bin/wazuh-' 2>/dev/null; "
         # Purge the dead identity everywhere so nothing can restore it.
         f"rm -f {_sh(_CLIENT_KEYS)} {_sh(_KEY_BACKUP)}; "
         f"security delete-generic-password -s {_sh(_KC_SERVICE)} -a {_sh(_KC_ACCOUNT)} "
         f"{_sh(_KEYCHAIN)} 2>/dev/null; "
-        # Register a brand-new agent identity (matches the postinstall flags).
-        f"{_sh(agent_auth)} -m {_sh(WAZUH_MANAGER)} -A {_sh(new_name)} -G {_sh(group)} 2>&1; "
+        f"{register}; "
         # Enrollment must have produced a key — otherwise starting is pointless.
         f"if [ ! -s {_sh(_CLIENT_KEYS)} ]; then echo REENROLL_NO_KEY; exit 1; fi; "
         f"chmod 640 {_sh(_CLIENT_KEYS)} && chown root:wazuh {_sh(_CLIENT_KEYS)}; "
@@ -624,6 +597,7 @@ def reenroll_agent():
         f"echo REENROLL_OK"
     )
     success, output = _run_privileged(script, timeout=180)
+    enrollment.discard(enrolled)
     if success and "REENROLL_OK" in output and "REENROLL_NO_KEY" not in output:
         logger.info(f"Wazuh re-enrolled under fresh name {new_name}")
         return (True, f"Re-enrolled as {new_name}")
@@ -683,7 +657,7 @@ def _stage_pkg_env_cmd(content):
     )
 
 
-def _launch_postinstall(pkg_path, agent_name, agent_group, restore_keys):
+def _launch_postinstall(pkg_path, agent_name, agent_group, restore_keys, key_file=None):
     """Launch the postinstall script with admin privileges via osascript.
 
     Copies the script to /tmp/ before execution because macOS Sequoia's
@@ -726,6 +700,10 @@ def _launch_postinstall(pkg_path, agent_name, agent_group, restore_keys):
     ]
     if restore_keys:
         args.append("--restore-keys")
+    if key_file:
+        # Server-side enrollment (enrollment.request); the script checks the
+        # line's shape, installs it as client.keys and deletes the file.
+        args.append(f"--key-file {shlex.quote(key_file)}")
 
     script_cmd = f"{shlex.quote(tmp_script)} {' '.join(args)}"
     # Wazuh's .pkg scripts read /tmp/wazuh_envs: stage it as root, run the
@@ -798,9 +776,14 @@ def full_install(progress_callback=None):
             progress_callback("Download failed")
         return False
 
-    # 2. Resolve agent name/group (group is auto-created server-side on enroll).
+    # 2. Resolve agent name/group. The Phoenix API enrolls server side, in
+    #    the user's group; without it the script runs agent-auth.
     agent_name = get_agent_name()
     agent_group = get_agent_group()
+    enrolled = enrollment.request(agent_name)
+    if enrolled:
+        agent_name = enrolled.agent_name
+        agent_group = enrolled.group
 
     if not write_env_file(agent_name, agent_group):
         if progress_callback:
@@ -816,12 +799,14 @@ def full_install(progress_callback=None):
     # request.  Server-side groups are auto-created on enroll; restoring a
     # stale client.keys would skip that.
     launched, status_file = _launch_postinstall(
-        pkg_path, agent_name, agent_group, restore_keys=False
+        pkg_path, agent_name, agent_group, restore_keys=False,
+        key_file=enrolled.key_file if enrolled else None,
     )
     if not launched:
+        enrollment.discard(enrolled)
         logger.error("Failed to launch postinstall script (user cancelled or osascript error)")
         if progress_callback:
-            progress_callback(get_text("wazuh.installation_failed"))
+            progress_callback("Installation failed")
         return False
 
     # Poll the status file until the script finishes.  full_install() is
@@ -859,9 +844,9 @@ def full_install(progress_callback=None):
         if not success:
             logger.error("Postinstall script timed out")
             if progress_callback:
-                progress_callback(get_text("wazuh.installation_timed_out"))
+                progress_callback("Installation timed out")
             return False
-        logger.warning(get_text("wazuh.agent.wazuh_functions_darwin.poll_timed_out_but_agent"))
+        logger.warning("Poll timed out but agent is installed on disk")
 
     if not success:
         error = details.get("error", "unknown error")
@@ -877,7 +862,7 @@ def full_install(progress_callback=None):
     elif enrollment == "enrolled":
         logger.info("[WAZUH] Fresh enrollment succeeded — new agent registered on manager")
     elif enrollment == "enroll_failed":
-        logger.warning(get_text("wazuh.agent.wazuh_functions_darwin.wazuh_agent_auth_enrollment_failed"))
+        logger.warning("[WAZUH] agent-auth enrollment failed — agent may connect via auto-enrollment")
 
     # Verify the agent is actually running via launchd
     if get_agent_status() == "Running":
@@ -885,7 +870,7 @@ def full_install(progress_callback=None):
         if progress_callback:
             progress_callback("Wazuh agent installed and running")
     else:
-        logger.warning(get_text("wazuh.agent.wazuh_functions_windows.agent_installed_but_not_yet"))
+        logger.warning("Agent installed but not yet running")
         if progress_callback:
             progress_callback("Wazuh agent installed (agent may need manual start)")
 
@@ -897,14 +882,14 @@ def full_install(progress_callback=None):
     return True
 
 """
-sudo /Library/Ossec/bin/wazuh-control restart
+sudo /Library/Phoenix/bin/wazuh-control restart
 Check status:
 
 
-sudo /Library/Ossec/bin/wazuh-control status
+sudo /Library/Phoenix/bin/wazuh-control status
 Check logs for the actual error:
 
 
-sudo tail -50 /Library/Ossec/logs/ossec.log
+sudo tail -50 /Library/Phoenix/logs/ossec.log
 Run the log command first — paste the output here and I can tell you exactly what's wrong.
 """

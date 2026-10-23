@@ -27,6 +27,8 @@ from pathlib import Path
 
 import pytest
 
+from plugins.wazuh.config import WAZUH_MANAGER
+
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "wazuh-postinstall-darwin.sh"
 
 # Skip on Windows runners — the script is bash-only.
@@ -36,7 +38,8 @@ pytestmark = pytest.mark.skipif(
 
 
 def _fake_bin(path: Path, body: str) -> None:
-    path.write_text("#!/bin/bash\n" + body)
+    # /usr/bin/env, not /bin/bash: NixOS has no /bin/bash (exec fails with 126).
+    path.write_text("#!/usr/bin/env bash\n" + body)
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
@@ -68,9 +71,19 @@ def harness(tmp_path, allow_subprocess):  # noqa: ARG001 — opts out of the sub
     # Defaults: every fake succeeds; tests override AGENT_AUTH_BODY /
     # LAUNCHCTL_BODY before invoking the script.
     _fake_bin(bins / "installer", 'exit 0\n')
-    _fake_bin(bins / "sed", 'exec /usr/bin/sed "$@"\n')
+    # The script uses BSD in-place syntax (`sed -i '' EXPR FILE`), which GNU
+    # sed rejects. Translate it to `-i.bak`, accepted by both BSD and GNU sed,
+    # and resolve the real sed from PATH (NixOS has no /usr/bin/sed).
+    real_sed = shutil.which("sed")
+    assert real_sed, "sed not found on PATH"
+    _fake_bin(bins / "sed", (
+        'if [ "$1" = "-i" ] && [ "$2" = "" ]; then shift 2; set -- -i.bak "$@"; fi\n'
+        f'exec {shquote(real_sed)} "$@"\n'
+    ))
     _fake_bin(bins / "security", 'exit 0\n')
     _fake_bin(bins / "wazuh-control", 'exit 0\n')
+    # The enrollment retry loop has a hardcoded `sleep 3`; shadow sleep on PATH.
+    _fake_bin(bins / "sleep", 'exit 0\n')
 
     return {
         "tmp_path": tmp_path,
@@ -116,7 +129,7 @@ def shquote(s: str) -> str:
     return "'" + s.replace("'", "'\\''") + "'"
 
 
-def _run(harness, extra_env=None):
+def _run(harness, extra_env=None, extra_args=()):
     env = os.environ.copy()
     env.update({
         "INSTALLER_BIN": str(harness["bins"] / "installer"),
@@ -133,6 +146,7 @@ def _run(harness, extra_env=None):
         # Keep retries cheap — script otherwise sleeps for many seconds.
         "BOOTSTRAP_SETTLE_SECONDS": "0",
         "BOOTSTRAP_RETRY_BACKOFF_SECONDS": "0",
+        "PATH": f"{harness['bins']}{os.pathsep}{os.environ.get('PATH', '')}",
     })
     if extra_env:
         env.update(extra_env)
@@ -142,9 +156,10 @@ def _run(harness, extra_env=None):
         "--pkg-path", str(harness["pkg"]),
         "--agent-name", "MacBook-AABB",
         "--agent-group", "drake-gmail.com",
-        "--manager", "dashboard.resisti.net",
+        "--manager", WAZUH_MANAGER,
         "--status-file", str(harness["status_file"]),
         "--log-file", str(harness["log_file"]),
+        *extra_args,
     ]
     return subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=60)
 
@@ -178,6 +193,8 @@ class TestSuccessPath:
         assert len(calls) == 1
         # client.keys was backed up
         assert harness["key_backup"].exists()
+        # ossec.conf was patched with the agent name
+        assert "<agent_name>MacBook-AABB</agent_name>" in harness["ossec_conf"].read_text()
 
     def test_enable_runs_before_bootstrap(self, harness):
         """Regression test: the uninstall path issues `launchctl disable
@@ -261,7 +278,7 @@ exit 1
 @pytest.mark.unit
 class TestManagerUnreachable:
     @pytest.mark.parametrize("agent_auth_stderr", [
-        "Unable to connect to dashboard.resisti.net:1515",
+        f"Unable to connect to {WAZUH_MANAGER}:1515",
         "Connection refused",
         "Network is unreachable",
     ])
@@ -331,3 +348,62 @@ exit 0
         assert status["error"] == "launchctl bootstrap failed"
         # Detail field should preserve the underlying launchctl output.
         assert "Input/output error" in status.get("detail", "")
+
+
+KEY_LINE = "005 MacBook-AABB any " + "ab" * 32
+
+
+@pytest.mark.unit
+@pytest.mark.security
+class TestServerSideKey:
+    """--key-file: the Phoenix API enrolled the agent; no agent-auth."""
+
+    def test_key_file_is_installed(self, harness):
+        _install_agent_auth_script(harness, 'exit 1\n')
+        _install_launchctl_script(harness, 'exit 0\n')
+        key_file = harness["tmp_path"] / "enroll" / "client.keys"
+        key_file.parent.mkdir()
+        key_file.write_text(KEY_LINE + "\n")
+
+        result = _run(harness, extra_args=("--key-file", str(key_file)))
+        assert result.returncode == 0, result.stderr
+        assert _read_status(harness)["enrollment"] == "enrolled"
+        assert harness["client_keys"].read_text() == KEY_LINE + "\n"
+        assert stat.S_IMODE(harness["client_keys"].stat().st_mode) == 0o640
+        assert not harness["agent_auth_calls"].exists()
+        assert not key_file.exists()  # the script deletes it
+        assert harness["key_backup"].exists()
+
+    @pytest.mark.parametrize("content", [
+        "not a key\n", "", "005 MacBook-AABB any abc; touch /tmp/x\n",
+        "005 MacBook AABB any " + "ab" * 32 + "\n",
+    ])
+    def test_bad_key_aborts_before_launchd(self, harness, content):
+        _install_agent_auth_script(harness, 'exit 0\n')
+        _install_launchctl_script(harness, 'exit 0\n')
+        key_file = harness["tmp_path"] / "key"
+        key_file.write_text(content)
+
+        result = _run(harness, extra_args=("--key-file", str(key_file)))
+        assert result.returncode != 0
+        status = _read_status(harness)
+        assert status["status"] == "failed" and status["error"] == "key_invalid"
+        assert not harness["client_keys"].exists()
+        assert not harness["agent_auth_calls"].exists()
+        assert not harness["launchctl_calls"].exists()
+
+    def test_symlink_to_other_file_is_not_copied(self, harness, tmp_path):
+        _install_agent_auth_script(harness, 'exit 0\n')
+        _install_launchctl_script(harness, 'exit 0\n')
+        secret = tmp_path / "secret"
+        secret.write_text("root:x:0:0:secret\n")
+        link = tmp_path / "link"
+        link.symlink_to(secret)
+        result = _run(harness, extra_args=("--key-file", str(link)))
+        assert result.returncode != 0
+        assert not harness["client_keys"].exists()
+        assert secret.exists()  # only the link is removed
+
+    def test_pattern_matches_the_app(self):
+        from plugins.wazuh.agent.enrollment import KEY_LINE_PATTERN
+        assert f"grep -Eqx '{KEY_LINE_PATTERN}'" in SCRIPT.read_text()

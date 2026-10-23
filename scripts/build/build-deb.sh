@@ -38,7 +38,10 @@ with open('packaging/Resistine.spec', 'r') as f:
         print("0.0.0")
 EOF
 )
-echo "Building Phoenix version: ${VERSION}"
+# Build ID and Debian version: see scripts/build/build-linux-packages.sh.
+export PHOENIX_BUILD="${PHOENIX_BUILD:-$(date -u +%Y%m%d%H%M)}"
+DEB_VERSION="1:${VERSION//-/\~}-${PHOENIX_BUILD}"
+echo "Building Phoenix version: ${VERSION} build ${PHOENIX_BUILD} (deb ${DEB_VERSION})"
 
 # Run PyInstaller build
 echo "Running PyInstaller..."
@@ -49,6 +52,7 @@ if [ ! -d "dist/Phoenix" ]; then
 	echo "Error: PyInstaller build failed. dist/Phoenix directory not found."
 	exit 1
 fi
+python scripts/build/check_bundle.py dist/Phoenix
 
 # Prepare Debian staging directory
 STAGING_DIR="dist/deb_staging"
@@ -79,7 +83,7 @@ cp resources/icons/app_icon.png "$STAGING_DIR/usr/share/pixmaps/phoenix.png"
 
 # Process control file
 echo "Generating DEBIAN/control file..."
-sed "s/\${VERSION}/${VERSION}/g" packaging/linux/control.template >"$STAGING_DIR/DEBIAN/control"
+sed "s/\${VERSION}/${DEB_VERSION}/g" packaging/linux/control.template >"$STAGING_DIR/DEBIAN/control"
 
 # Copy post-installation and post-removal scripts
 echo "Copying package maintenance scripts..."
@@ -89,7 +93,7 @@ chmod 755 "$STAGING_DIR/DEBIAN/postinst"
 chmod 755 "$STAGING_DIR/DEBIAN/postrm"
 
 # Build Debian package
-DEB_FILE="dist/phoenix_${VERSION}_amd64.deb"
+DEB_FILE="dist/phoenix_${DEB_VERSION#*:}_amd64.deb"
 echo "Building Debian package: ${DEB_FILE}..."
 dpkg-deb --root-owner-group --build "$STAGING_DIR" "$DEB_FILE"
 

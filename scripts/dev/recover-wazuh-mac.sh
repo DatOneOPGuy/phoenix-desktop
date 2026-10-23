@@ -8,7 +8,7 @@
 # What this does (idempotent):
 #   1. Bootout + disable the launchd service (clears the throttle).
 #   2. Stop any straggler wazuh-* daemons (graceful — NO SIGKILL on agentd).
-#   3. Wipe /Library/Ossec, the client.keys file backup, and the System
+#   3. Wipe /Library/Phoenix, the client.keys file backup, and the System
 #      Keychain entry, so the next install enrolls fresh.
 #   4. Clear the Phoenix app's stored install state so the UI no longer
 #      thinks the agent is installed.
@@ -31,13 +31,13 @@ if [ "$EUID" -ne 0 ]; then
     exec sudo bash "$0" "$@"
 fi
 
-WAZUH_DIR="/Library/Ossec"
+WAZUH_DIR="/Library/Phoenix"
 PLIST="/Library/LaunchDaemons/com.wazuh.agent.plist"
 KEY_BACKUP="/Library/Application Support/Resistine/wazuh_client.keys"
 KEYCHAIN="/Library/Keychains/System.keychain"
 KC_SERVICE="com.resistine.wazuh.agent"
 KC_ACCOUNT="client_key"
-RESISTINE_SETTINGS="$HOME/Library/Application Support/Resistine/settings.json"
+RESISTINE_SETTINGS="$HOME/Library/Application Support/Phoenix/settings.json"
 
 echo "[1/5] Booting out launchd service…"
 launchctl bootout system "$PLIST" 2>/dev/null || true
@@ -52,7 +52,7 @@ if [ -x "$WAZUH_DIR/bin/wazuh-control" ]; then
 fi
 sleep 1
 
-echo "[3/5] Removing /Library/Ossec and launchd plist…"
+echo "[3/5] Removing /Library/Phoenix and launchd plist…"
 rm -rf "$WAZUH_DIR"
 rm -f  "$PLIST"
 rm -rf "/Library/StartupItems/WAZUH"
@@ -62,7 +62,7 @@ rm -f "$KEY_BACKUP"
 security delete-generic-password \
     -s "$KC_SERVICE" -a "$KC_ACCOUNT" "$KEYCHAIN" >/dev/null 2>&1 || true
 
-echo "[5/5] Resetting Resistine install-state…"
+echo "[5/5] Resetting Phoenix install-state…"
 # Drop just the wazuh.* fields so other settings survive. python3 always
 # ships on macOS, so use it for the JSON edit.
 if [ -f "$RESISTINE_SETTINGS" ]; then
@@ -92,6 +92,6 @@ echo "Done. Next steps:"
 echo "  1. Ask the Wazuh manager admin to delete the agent named"
 echo "     '$(scutil --get LocalHostName 2>/dev/null || hostname)-…'"
 echo "     (or enable <force><enabled>yes</enabled></force> in authd config)."
-echo "  2. Quit Resistine fully, then relaunch and click Install Security again."
+echo "  2. Quit Phoenix fully, then relaunch and click Install Security again."
 echo "     The new postinstall script will retry under a suffixed name if the"
 echo "     server-side cleanup hasn't happened yet."

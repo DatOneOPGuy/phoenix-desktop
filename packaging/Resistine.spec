@@ -7,7 +7,8 @@ Swift components (CLI, XPC, Network Extension) are added by build script
 
 import os
 import sys
-from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+from PyInstaller.utils.hooks import (
+    collect_all, collect_data_files, collect_dynamic_libs, collect_submodules)
 
 block_cipher = None
 IS_MACOS = sys.platform == "darwin"
@@ -21,6 +22,14 @@ APP_NAME = 'Phoenix'
 DISPLAY_NAME = 'Phoenix'
 BUNDLE_ID = 'com.resistine.desktop'
 VERSION = '2026.07.20-rc'
+# Build ID: tells builds of one VERSION apart (package versions, file names,
+# the version line in the app). UTC minutes, so every rebuild sorts after the
+# one before. The build scripts set PHOENIX_BUILD so that every package made
+# in one run carries the same ID.
+import datetime as _dt
+BUILD = os.environ.get('PHOENIX_BUILD') or _dt.datetime.now(_dt.timezone.utc).strftime('%Y%m%d%H%M')
+if not BUILD.isdigit():
+    raise SystemExit(f"PHOENIX_BUILD must be digits (UTC YYYYMMDDHHMM), not {BUILD!r}")
 
 # Paths — project root is one level up from packaging/
 _spec_dir = os.path.dirname(os.path.abspath(SPEC))
@@ -36,10 +45,14 @@ import tempfile as _tmpmod
 _version_file = os.path.join(_tmpmod.gettempdir(), 'VERSION')
 with open(_version_file, 'w') as _vf:
     _vf.write(VERSION)
+_build_file = os.path.join(_tmpmod.gettempdir(), 'BUILD')
+with open(_build_file, 'w') as _bf:
+    _bf.write(BUILD)
 
 # Collect data files
 datas = [
     (_version_file, '.'),
+    (_build_file, '.'),
     (_src('resources'), 'resources'),
     (_src('plugins'), 'plugins'),
     (_src('gui'), 'gui'),
@@ -77,6 +90,17 @@ hiddenimports = [
     'opentelemetry.trace',
 ]
 
+# Chat over Matrix. plugins/ ships as data, so PyInstaller never sees the chat
+# plugin's `from nio import ...`; without this the bundle has no nio and
+# matrix_transport.available() is False ("lacks Matrix encryption support").
+# nio.crypto picks its E2EE backend at import time (vodozemac, a Rust
+# extension), so collect both packages whole.
+hiddenimports += collect_submodules('nio')
+_vodozemac_datas, _vodozemac_binaries, _vodozemac_hidden = collect_all('vodozemac')
+datas += _vodozemac_datas
+hiddenimports += _vodozemac_hidden + [
+    'peewee', 'cachetools', 'atomicwrites', 'unpaddedbase64', 'jsonschema']
+
 if IS_MACOS:
     hiddenimports.extend([
         'keyring.backends.macOS',
@@ -102,7 +126,8 @@ if IS_WINDOWS:
 a = Analysis(
     [_src('main.py')],
     pathex=[base_path],
-    binaries=[(_src('frameworks/WinSparkle/WinSparkle.dll'), '.')] if IS_WINDOWS else [],
+    binaries=_vodozemac_binaries + (
+        [(_src('frameworks/WinSparkle/WinSparkle.dll'), '.')] if IS_WINDOWS else []),
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

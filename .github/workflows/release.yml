@@ -139,21 +139,95 @@ jobs:
           ./scripts/build/build-distribution.sh
 
       # --- Sign DMG with Sparkle EdDSA key ---
-      # NOTE: The Sparkle DMG-signing and appcast-publish steps were removed
-      # with the retirement of the legacy update channel. Phoenix builds have
-      # auto-updates disabled; when Phoenix update infrastructure exists,
-      # reintroduce signing with a FRESH key and a Phoenix-owned feed.
+      - name: Sign DMG for Sparkle
+        id: sparkle_sign
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          # sign_update reads the key from SPARKLE_ED_PRIVATE_KEY env var
+          # when the keychain entry isn't available
+          SIGN_OUTPUT=$(./scripts/build/sign_update dist/Phoenix-Installer.dmg)
+          echo "Raw output: $SIGN_OUTPUT"
+
+          ED_SIGNATURE=$(echo "$SIGN_OUTPUT" | grep -o 'sparkle:edSignature="[^"]*"' | cut -d'"' -f2)
+          LENGTH=$(echo "$SIGN_OUTPUT" | grep -o 'length="[^"]*"' | cut -d'"' -f2)
+
+          echo "ED_SIGNATURE=$ED_SIGNATURE" >> "$GITHUB_OUTPUT"
+          echo "LENGTH=$LENGTH" >> "$GITHUB_OUTPUT"
 
       # --- Create GitHub Release with the DMG ---
       - name: Create GitHub Release
         id: release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/Resistine-Installer.dmg
+          files: dist/Phoenix-Installer.dmg
           generate_release_notes: true
           prerelease: ${{ steps.version.outputs.IS_PRERELEASE == 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # --- Update appcast.xml in resistine.github.io ---
+      - name: Update appcast
+        env:
+          ED_SIGNATURE: ${{ steps.sparkle_sign.outputs.ED_SIGNATURE }}
+          LENGTH: ${{ steps.sparkle_sign.outputs.LENGTH }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          CHANNEL: ${{ steps.version.outputs.CHANNEL }}
+          DEPLOY_KEY: ${{ secrets.PAGES_DEPLOY_KEY }}
+        run: |
+          PUB_DATE=$(date -u '+%a, %d %b %Y %H:%M:%S +0000')
+          DOWNLOAD_URL="https://github.com/Resistine/Resistine-Desktop/releases/download/v${VERSION}/Phoenix-Installer.dmg"
+
+          # Add sparkle:channel tag for beta/pre-release versions
+          CHANNEL_TAG=""
+          if [ -n "$CHANNEL" ]; then
+            CHANNEL_TAG="<sparkle:channel>${CHANNEL}</sparkle:channel>"
+          fi
+
+          NEW_ITEM=$(cat <<XMLEOF
+              <item>
+                <title>Version ${VERSION}</title>
+                <pubDate>${PUB_DATE}</pubDate>
+                ${CHANNEL_TAG}
+                <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
+                <enclosure
+                  url="${DOWNLOAD_URL}"
+                  sparkle:version="${VERSION}"
+                  sparkle:shortVersionString="${VERSION}"
+                  length="${LENGTH}"
+                  type="application/octet-stream"
+                  sparkle:edSignature="${ED_SIGNATURE}"
+                />
+              </item>
+          XMLEOF
+          )
+
+          # Clone the pages repo
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" > ~/.ssh/pages_key
+          chmod 600 ~/.ssh/pages_key
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/pages_key -o StrictHostKeyChecking=no"
+
+          git clone git@github.com:Resistine/resistine.github.io.git /tmp/pages
+          cd /tmp/pages
+
+          # Insert new item after the comment block (before first existing <item>)
+          python3 -c "
+          import re
+          with open('appcast.xml', 'r') as f:
+              content = f.read()
+          new_item = '''$NEW_ITEM'''
+          # Insert before the first <item> tag
+          content = content.replace('<item>', new_item + '\n    <item>', 1)
+          with open('appcast.xml', 'w') as f:
+              f.write(content)
+          "
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add appcast.xml
+          git commit -m "Release v${VERSION}"
+          git push
 
       # --- Clean up keychain ---
       - name: Clean up

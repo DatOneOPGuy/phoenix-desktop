@@ -26,11 +26,6 @@ import logging
 import time
 import sys
 import shutil
-from utils.i18n import get_text
-from plugins.vpn.wireguard.config_validation import (
-    SCRIPT_HOOK_KEYS,
-    is_valid_config_name,
-)
 
 
 # ---------------- Configuration ----------------
@@ -187,7 +182,7 @@ def _get_log_file() -> str:
         return programdata_log
     except PermissionError:
         appdata_log = os.path.join(
-            os.environ.get("APPDATA", ""), "Resistine", "vpn_service.log"
+            os.environ.get("APPDATA", ""), "Phoenix", "vpn_service.log"
         )
         os.makedirs(os.path.dirname(appdata_log), exist_ok=True)
         return appdata_log
@@ -294,14 +289,14 @@ def find_config(tunnel: str, config_path: str = None) -> str | None:
         logger.info(f"Using ProgramData config: {fallback}")
         return fallback
 
-    logger.warning(get_text("vpn.wireguard.windows_vpn_service.no_config_found_for_tunnel", tunnel=tunnel))
+    logger.warning(f"No config found for tunnel '{tunnel}'")
     return None
 
 
 def find_default_tunnel() -> str | None:
     """
     Discover default tunnel from ProgramData.
-    Prefers 'resistine' if present, otherwise first .conf found.
+    Prefers 'phoenix' (then the pre-rebrand 'resistine'), otherwise first .conf found.
     """
     if not os.path.exists(CONFIG_BASE):
         return None
@@ -311,8 +306,9 @@ def find_default_tunnel() -> str | None:
         logger.warning(f"No .conf files in {CONFIG_BASE}")
         return None
 
-    if "resistine.conf" in confs:
-        return "resistine"
+    for preferred in ("phoenix", "resistine"):
+        if f"{preferred}.conf" in confs:
+            return preferred
 
     name = confs[0].replace(".conf", "")
     logger.info(f"Auto-detected tunnel: {name}")
@@ -387,7 +383,8 @@ def _ensure_system_config(tunnel: str, source_conf: str) -> str:
     except Exception as e:
         # Non-fatal: try the original path and let WireGuard report the error
         logger.warning(
-            get_text("vpn.wireguard.windows_vpn_service.could_not_copy_config_to", e=e)
+            f"Could not copy config to ProgramData, using original path. "
+            f"Error: {e}"
         )
         return source_conf
 
@@ -434,7 +431,7 @@ def start_tunnel(tunnel: str):
     combined = (result.stdout + result.stderr).lower()
 
     if "already running" in combined:
-        return True, get_text("vpn.wireguard.windows_vpn_service.already_running")
+        return True, "Already running"
     if "start_pending" in combined or result.returncode == 1056:
         return True, "Starting"
     if result.returncode == 0:
@@ -449,7 +446,7 @@ def stop_tunnel(tunnel: str):
     combined = (result.stdout + result.stderr).lower()
 
     if "not started" in combined or "1062" in combined:
-        return True, get_text("vpn.wireguard.windows_vpn_service.already_stopped")
+        return True, "Already stopped"
 
     return result.returncode == 0, combined.strip()
 
@@ -459,7 +456,7 @@ def status_tunnel(tunnel: str) -> str:
     out = (result.stdout + result.stderr).lower()
 
     if "1060" in out or "does not exist" in out:
-        return get_text("antivirus.not_installed")
+        return "Not Installed"
     if "running" in out:
         return "Running"
     if "start_pending" in out:
@@ -495,19 +492,17 @@ def _validated_config_path(tunnel: str, config_path) -> str | None:
 
 
 def handle_request(request: dict) -> dict:
-    supplied = request.get("token")
-    if (not isinstance(supplied, str)
-            or not hmac.compare_digest(supplied, IPC_TOKEN)):
-        return {"status": "error", "message": get_text("vpn.wireguard.windows_vpn_service.unauthorized")}
+    if request.get("token") != IPC_TOKEN:
+        return {"status": "error", "message": "Unauthorized"}
 
     cmd         = request.get("command")
     tunnel      = request.get("tunnel")
 
     if cmd not in ALLOWED_COMMANDS:
-        return {"status": "error", "message": get_text("vpn.wireguard.windows_vpn_service.invalid_command_cmd", cmd=cmd)}
+        return {"status": "error", "message": f"Invalid command: {cmd}"}
 
     if not tunnel:
-        return {"status": "error", "message": get_text("vpn.wireguard.windows_vpn_service.missing_tunnel")}
+        return {"status": "error", "message": "Missing tunnel"}
 
     # The tunnel name is interpolated into service names and ProgramData
     # paths by a SYSTEM process — reject separators, "..", flag-like names.
@@ -523,7 +518,7 @@ def handle_request(request: dict) -> dict:
         if cmd == "connect":
             state = status_tunnel(tunnel)
             if state == "Running":
-                return {"status": "ok", "state": "Running", "message": get_text("vpn.wireguard.windows_vpn_service.already_running")}
+                return {"status": "ok", "state": "Running", "message": "Already running"}
 
             # Always reinstall before starting — even if the tunnel service
             # exists in "Stopped" state. A stopped WireGuardTunnel$ service
@@ -546,7 +541,7 @@ def handle_request(request: dict) -> dict:
         if cmd == "disconnect":
             state = status_tunnel(tunnel)
             if state in ("Stopped", "Not Installed"):
-                return {"status": "ok", "state": "Stopped", "message": get_text("vpn.wireguard.windows_vpn_service.already_stopped")}
+                return {"status": "ok", "state": "Stopped", "message": "Already stopped"}
             ok, msg = stop_tunnel(tunnel)
             actual_state = status_tunnel(tunnel)
             if ok:
@@ -566,7 +561,7 @@ def handle_request(request: dict) -> dict:
             time.sleep(1)
             ok, msg = start_tunnel(tunnel)
             actual_state = status_tunnel(tunnel)
-            return {"status": "ok" if ok else "error", "state": actual_state, "message": get_text("vpn.wireguard.windows_vpn_service.restarted")}
+            return {"status": "ok" if ok else "error", "state": actual_state, "message": "Restarted"}
 
         if cmd == "health":
             return {
@@ -580,7 +575,7 @@ def handle_request(request: dict) -> dict:
         logger.exception(f"Error handling '{cmd}': {e}")
         return {"status": "error", "message": str(e)}
 
-    return {"status": "error", "message": get_text("vpn.wireguard.windows_vpn_service.unhandled_command")}
+    return {"status": "error", "message": "Unhandled command"}
 
 
 # ---------------- Socket Server ----------------

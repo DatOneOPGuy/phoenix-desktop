@@ -18,7 +18,6 @@ import time
 
 from utils import settings
 from utils.logger import logger
-from utils.i18n import get_text
 
 # This module orchestrates the ClamAV setup state machine, but every concrete
 # implementation it calls into (_launch_clamav_postinstall, _SYSTEM_*, FDA
@@ -51,12 +50,9 @@ _NAMESPACE = "antivirus"
 _lock = threading.Lock()
 
 # User-level DB seeding directory
-# Derive from get_config_dir() — the single source of truth for the data
-# dir name (legacy "Resistine" until the migration): a hardcoded name here
-# split the install in two, with freshclam seeding one tree while the
-# postinstall read the other (NO_DB_FILES).
-from utils.settings import get_config_dir as _get_config_dir
-_CLAMAV_DATA_DIR = os.path.join(_get_config_dir(), "clamav")
+_CLAMAV_DATA_DIR = os.path.join(
+    os.path.expanduser("~/Library/Application Support/Phoenix"), "clamav",
+)
 _USER_DB_DIR = os.path.join(_CLAMAV_DATA_DIR, "db")
 _LOCK_FILE = os.path.join(_CLAMAV_DATA_DIR, "freshclam.lock")
 
@@ -178,7 +174,7 @@ def trigger_system_setup() -> bool:
         state = get_setup_state()
         if state != STATE_DB_READY:
             logger.warning(
-                get_text("antivirus.installer_service.av_installer_trigger_system_setup", state=state),
+                f"[AV-INSTALLER] trigger_system_setup in wrong state: {state}",
             )
             return False
         _set_state(STATE_INSTALLING)
@@ -281,7 +277,9 @@ def check_and_advance():
         if _system_install_intact():
             return
         logger.warning(
-            get_text("antivirus.installer_service.av_installer_setup_state_completed"),
+            "[AV-INSTALLER] setup_state=completed but system ClamAV install "
+            "is missing (likely wiped by a prior uninstall) — resetting to "
+            "re-run setup",
         )
         with _lock:
             _set_state(STATE_NOT_STARTED)
@@ -335,7 +333,7 @@ def check_and_advance():
                 fcntl.flock(probe_fd, fcntl.LOCK_UN)
             # Lock was available → no freshclam running → stuck state
             with _lock:
-                logger.warning(get_text("antivirus.installer_service.av_installer_stuck_in_seeding"))
+                logger.warning("[AV-INSTALLER] Stuck in SEEDING_DB, resetting")
                 _set_state(STATE_NOT_STARTED)
                 state = STATE_NOT_STARTED
         except (OSError, BlockingIOError):

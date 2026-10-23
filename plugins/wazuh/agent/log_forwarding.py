@@ -29,19 +29,27 @@ _PLATFORM = platform.system()
 _NAMESPACE = "wazuh"
 _FLAG = "clamav_forwarding_enabled"
 
-# Per-platform ossec.conf + ClamAV log locations.
+# Per-platform ClamAV log locations; the agent dir comes from _agent_dir().
 if _PLATFORM == "Darwin":
-    _OSSEC_CONF = "/Library/Ossec/etc/ossec.conf"
-    _WAZUH_CONTROL = "/Library/Ossec/bin/wazuh-control"
     _CLAMAV_LOG = "/Library/Application Support/Resistine/clamav/log/clamd.log"
 elif _PLATFORM == "Linux":
-    _OSSEC_CONF = "/var/ossec/etc/ossec.conf"
-    _WAZUH_CONTROL = "/var/ossec/bin/wazuh-control"
     # Distro ClamAV logs here by default; harmless if the path differs — the
     # agent simply finds nothing to tail until the file exists.
     _CLAMAV_LOG = "/var/log/clamav/clamav.log"
 else:  # Windows uses Defender (its own eventchannel localfile) — nothing to do.
-    _OSSEC_CONF = _WAZUH_CONTROL = _CLAMAV_LOG = ""
+    _CLAMAV_LOG = ""
+
+
+def _agent_dir() -> str:
+    """The agent's install dir, looked up on each call (it may be installed
+    after this module is imported); empty where there is nothing to do."""
+    if _PLATFORM == "Darwin":
+        from plugins.wazuh.config import WAZUH_INSTALL_DIR
+        return WAZUH_INSTALL_DIR
+    if _PLATFORM == "Linux":
+        from plugins.wazuh.config import LINUX_WAZUH_DIR, LINUX_WAZUH_DIR_CANDIDATES
+        return next((d for d in LINUX_WAZUH_DIR_CANDIDATES if os.path.isdir(d)), LINUX_WAZUH_DIR)
+    return ""
 
 
 def is_enabled() -> bool:
@@ -53,7 +61,7 @@ def _both_present() -> bool:
     """True only if the Wazuh agent is installed AND ClamAV has produced a log."""
     if _PLATFORM not in ("Darwin", "Linux"):
         return False
-    if not os.path.isfile(_OSSEC_CONF):
+    if not os.path.isfile(os.path.join(_agent_dir(), "etc", "ossec.conf")):
         return False
     # ClamAV set up = its log file exists (created by clamd once running).
     return os.path.exists(_CLAMAV_LOG)
@@ -66,7 +74,7 @@ def _inject_script() -> str:
     # inserted immediately before the closing </ossec_config>.
     py = (
         "import sys\n"
-        f"conf={_OSSEC_CONF!r}\n"
+        f"conf={os.path.join(_agent_dir(), 'etc', 'ossec.conf')!r}\n"
         f"log={_CLAMAV_LOG!r}\n"
         "s=open(conf, encoding='utf-8').read()\n"
         "if log in s:\n"
@@ -88,7 +96,7 @@ def _inject_script() -> str:
         f.write(py)
     return (
         f"/usr/bin/python3 {shlex.quote(py_path)} && "
-        f"{shlex.quote(_WAZUH_CONTROL)} restart; "
+        f"{shlex.quote(os.path.join(_agent_dir(), 'bin', 'wazuh-control'))} restart; "
         f"rm -f {shlex.quote(py_path)}"
     ), py_path
 

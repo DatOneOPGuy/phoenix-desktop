@@ -121,17 +121,19 @@ def parse_infection_line(line: str) -> tuple[str, str]:
 
 # ── Wazuh ossec.conf integration ─────────────────────────
 
-_OSSEC_PATHS = {
-    "Darwin": "/Library/Ossec/etc/ossec.conf",
-    "Linux": "/var/ossec/etc/ossec.conf",
-    "Windows": r"C:\Program Files (x86)\ossec-agent\ossec.conf",
-}
-
-_WAZUH_DIRS = {
-    "Darwin": "/Library/Ossec",
-    "Linux": "/var/ossec",
-    "Windows": r"C:\Program Files (x86)\ossec-agent",
-}
+def _wazuh_dir():
+    """The agent's install dir on this platform (Linux: the first one present)."""
+    from plugins.wazuh.config import (
+        LINUX_WAZUH_DIR, LINUX_WAZUH_DIR_CANDIDATES, WAZUH_INSTALL_DIR, WINDOWS_WAZUH_DIR,
+    )
+    system = platform.system()
+    if system == "Darwin":
+        return WAZUH_INSTALL_DIR
+    if system == "Windows":
+        return WINDOWS_WAZUH_DIR
+    if system == "Linux":
+        return next((d for d in LINUX_WAZUH_DIR_CANDIDATES if os.path.isdir(d)), LINUX_WAZUH_DIR)
+    return None
 
 
 def is_wazuh_installed() -> bool:
@@ -140,7 +142,7 @@ def is_wazuh_installed() -> bool:
     The config directory is root-only, so we check for the install
     directory rather than the config file itself.
     """
-    d = _WAZUH_DIRS.get(platform.system())
+    d = _wazuh_dir()
     return bool(d and os.path.isdir(d))
 
 
@@ -204,7 +206,8 @@ def setup_wazuh_forwarding() -> tuple[bool, str]:
     if not is_wazuh_installed():
         return False, "Wazuh agent not installed."
 
-    conf = _OSSEC_PATHS.get(platform.system())
+    d = _wazuh_dir()
+    conf = os.path.join(d, "ossec.conf" if platform.system() == "Windows" else "etc/ossec.conf") if d else None
     if not conf:
         return False, "Unsupported platform."
 
@@ -332,10 +335,8 @@ def _inject_linux(conf: str) -> tuple[bool, str]:
         f"{restart_chain}"
     )
 
-    for cmd in (
-        ["pkexec", "bash", "-c", shell_cmd],
-        ["sudo", "bash", "-c", shell_cmd],
-    ):
+    elevate = [[]] if os.geteuid() == 0 else [["pkexec"], ["sudo"]]
+    for cmd in ([*e, "bash", "-c", shell_cmd] for e in elevate):
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=30,

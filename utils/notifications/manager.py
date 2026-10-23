@@ -25,7 +25,6 @@ Licensed under the GNU General Public License v2 or later
 import platform
 
 from utils.logger import logger
-from utils.i18n import get_text
 
 # ---------------------------------------------------------------------------
 # Platform detection (same pattern as utils/updates/manager.py)
@@ -60,7 +59,7 @@ def init():
     try:
         _backend.init()
     except Exception as e:
-        logger.warning(get_text("utils.notifications.manager.failed_to_initialize_notification_backend"), e)
+        logger.warning("Failed to initialize notification backend: %s", e)
 
 
 def send(title: str, body: str, urgency: str = "normal", on_click=None):
@@ -87,4 +86,4 @@ def send(title: str, body: str, urgency: str = "normal", on_click=None):
         else:
             _backend.send(title, body, urgency, on_click=on_click)
     except Exception as e:
-        logger.warning(get_text("utils.notifications.manager.failed_to_send_notification_s"), e)
+        logger.warning("Failed to send notification: %s", e)

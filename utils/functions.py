@@ -21,7 +21,7 @@ def _get_bundle_path() -> str or None:
     """Return the .app bundle path, or None if not running as a bundle."""
     if not getattr(sys, "frozen", False):
         return None
-    # sys.executable is e.g. /Volumes/Phoenix Installer/Phoenix.app/Contents/MacOS/Phoenix
+    # sys.executable is e.g. /Volumes/Phoenix/Phoenix.app/Contents/MacOS/Phoenix
     path = os.path.realpath(sys.executable)
     while path != "/":
         if path.endswith(".app"):
@@ -56,6 +56,54 @@ def move_to_applications() -> bool:
         subprocess.Popen([executable])
         return True
     except (OSError, shutil.Error):
+        return False
+
+
+def restore_system_library_path() -> None:
+    """Give child processes the system's libraries, not the bundle's.
+
+    The PyInstaller bootloader on Linux points LD_LIBRARY_PATH at the bundle
+    (keeping the user's value in LD_LIBRARY_PATH_ORIG). Every child inherits
+    it, so pkexec, wg-quick or systemctl load the bundle's older GLib and fail
+    ("undefined symbol: g_fdwalk_set_cloexec"). The loader read the variable
+    when this process started, so changing it now only affects children.
+    """
+    if not getattr(sys, "frozen", False) or not sys.platform.startswith("linux"):
+        return
+    orig = os.environ.pop("LD_LIBRARY_PATH_ORIG", None)
+    if orig:
+        os.environ["LD_LIBRARY_PATH"] = orig
+    else:
+        os.environ.pop("LD_LIBRARY_PATH", None)
+
+
+LEGACY_BUNDLE = "/Applications/Resistine.app"
+
+
+def remove_legacy_bundle() -> bool:
+    """Delete the pre-rename /Applications/Resistine.app once Phoenix.app runs.
+
+    A DMG install drops Phoenix.app next to the old bundle instead of
+    replacing it. Only removes a bundle with our bundle ID, and never the
+    one that is running. Best effort: returns True if it removed it.
+    """
+    import plistlib
+
+    src = _get_bundle_path()
+    if sys.platform != "darwin" or not src or not os.path.isdir(LEGACY_BUNDLE):
+        return False
+    if os.path.realpath(src) == os.path.realpath(LEGACY_BUNDLE):
+        return False
+    try:
+        with open(os.path.join(src, "Contents", "Info.plist"), "rb") as f:
+            ours = plistlib.load(f).get("CFBundleIdentifier")
+        with open(os.path.join(LEGACY_BUNDLE, "Contents", "Info.plist"), "rb") as f:
+            theirs = plistlib.load(f).get("CFBundleIdentifier")
+        if not ours or ours != theirs:
+            return False
+        shutil.rmtree(LEGACY_BUNDLE)
+        return True
+    except (OSError, ValueError, plistlib.InvalidFileException):
         return False
 
 

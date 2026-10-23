@@ -9,6 +9,7 @@ Licensed under the GNU General Public License v2 or later
 
 import base64
 import os
+import platform
 import re
 import socket
 import subprocess
@@ -21,21 +22,21 @@ from utils import settings
 from utils.logger import logger
 from utils.windows_admin import is_admin as _is_admin
 
+from plugins.wazuh.agent import enrollment, phoenix_packages
 from plugins.wazuh.config import (
     WAZUH_MANAGER,
+    WAZUH_MANAGER_ENDPOINT,
     WAZUH_MANAGER_PORT,
     WAZUH_PROTOCOL,
     WAZUH_REGISTRATION_PORT,
-    WINDOWS_WAZUH_MSI_URL,
     WINDOWS_WAZUH_DIR,
     WINDOWS_SYSMON_ZIP_URL,
     WINDOWS_SYSMON_CONFIG_URL,
 )
-from utils.i18n import get_text
 
 _OSSEC_CONF = os.path.join(WINDOWS_WAZUH_DIR, "ossec.conf")
 _CLIENT_KEYS = os.path.join(WINDOWS_WAZUH_DIR, "client.keys")
-_KEY_BACKUP = os.path.join(os.environ.get("APPDATA", ""), "Resistine", "wazuh_client.keys")
+_KEY_BACKUP = os.path.join(os.environ.get("APPDATA", ""), "Phoenix", "wazuh_client.keys")
 _AGENT_AUTH = os.path.join(WINDOWS_WAZUH_DIR, "agent-auth.exe")
 _SERVICE_NAME = "WazuhSvc"
 
@@ -175,7 +176,7 @@ def _get_machine_guid():
         winreg.CloseKey(key)
         return guid
     except Exception as e:
-        logger.warning(get_text("wazuh.agent.wazuh_functions_windows.could_not_read_machineguid_e", e=e))
+        logger.warning(f"Could not read MachineGuid: {e}")
         return None
 
 
@@ -199,19 +200,8 @@ def get_agent_name():
 
 
 def get_agent_group():
-    """Return the user's email (sanitized) as the agent group.
-
-    Replaces '@' with '-' to match the canonical group name created by
-    the /verify-otp backend.  Email flows into PowerShell commands
-    (msiexec args) so it must also be stripped of shell metacharacters
-    using the same allowlist as get_agent_name.
-    """
-    email = settings.get("auth", "email", "default")
-    if email and email != "default":
-        sanitized = re.sub(r"[^A-Za-z0-9.\-_]", "", email.replace("@", "-"))
-        if sanitized:
-            return sanitized
-    return "default"
+    """The Wazuh group of this user's agents (u_<Matrix localpart>)."""
+    return enrollment.agent_group()
 
 
 def needs_reenrollment():
@@ -234,7 +224,7 @@ def is_agent_installed():
 def get_agent_status():
     """Return 'Running', 'Stopped', or 'Not Installed'."""
     if not is_agent_installed():
-        return get_text("antivirus.not_installed")
+        return "Not Installed"
 
     try:
         result = subprocess.run(
@@ -252,7 +242,7 @@ def get_agent_status():
         if "STOPPED" in result.stdout:
             return "Stopped"
     except Exception as e:
-        logger.warning(get_text("wazuh.agent.wazuh_functions_windows.could_not_query_service_name", _SERVICE_NAME=_SERVICE_NAME, e=e))
+        logger.warning(f"Could not query {_SERVICE_NAME} service: {e}")
 
     return "Stopped"
 
@@ -273,8 +263,8 @@ def get_agent_connection():
 
 
 def get_package_url():
-    """Return the Wazuh MSI download URL."""
-    return WINDOWS_WAZUH_MSI_URL
+    """Return the manifest URL of the Phoenix agent MSI."""
+    return phoenix_packages.manifest_url("windows")
 
 
 def _is_sysmon_installed():
@@ -471,32 +461,51 @@ def inject_defender_config():
 
 
 def download_package(progress_callback=None):
-    """Download the Wazuh MSI to a temporary directory.
+    """Download the signed Phoenix agent MSI (needs a Phoenix sign-in).
 
-    Returns the local path on success, or None on failure.
+    Returns the verified local path, or None on failure.
     """
-    url = get_package_url()
-    tmp_dir = tempfile.mkdtemp(prefix="wazuh_")
-    msi_path = os.path.join(tmp_dir, "wazuh-agent.msi")
+    return phoenix_packages.download_or_none(
+        tempfile.mkdtemp(prefix="phoenix_agent_"), progress_callback,
+        filename="phoenix-agent.msi")
 
-    if _download_file(url, msi_path, progress_callback, "Downloading Wazuh agent..."):
-        return msi_path
-    return None
+
+def _key_write_ps(key_file):
+    """PowerShell installing the key line from ``key_file`` (written by
+    enrollment.request) as client.keys, after re-checking its shape."""
+    return (
+        f"$k = Get-Content -LiteralPath {_ps_quote(key_file)} -TotalCount 1 -ErrorAction Stop; "
+        f"if ($k -cnotmatch {_ps_quote('^' + enrollment.KEY_LINE_PATTERN + '$')}) "
+        f"{{ Write-Output 'KEY_INVALID'; throw 'KEY_INVALID' }}; "
+        f"[IO.File]::WriteAllText({_ps_quote(_CLIENT_KEYS)}, $k + \"`n\", [Text.Encoding]::ASCII)"
+    )
+
+
+def _register_ps(enrolled, agent_name, agent_group):
+    """Write the API-enrolled key, or (fallback) register with agent-auth."""
+    if enrolled:
+        return _key_write_ps(enrolled.key_file)
+    return (
+        f"if (Test-Path {_ps_quote(_AGENT_AUTH)}) {{ "
+        f"& {_ps_quote(_AGENT_AUTH)} -m {_ps_quote(WAZUH_MANAGER)} "
+        f"-p {_ps_quote(WAZUH_REGISTRATION_PORT)} "
+        f"-A {_ps_quote(agent_name)} -G {_ps_quote(agent_group)} }}"
+    )
 
 
 def _ensure_ossec_address():
-    """Patch ossec.conf if the manager address is wrong (e.g. left as 0.0.0.0 by MSI)."""
+    """Patch ossec.conf if the manager endpoint is wrong (e.g. left as 0.0.0.0 by MSI)."""
     try:
         with open(_OSSEC_CONF, "r", encoding="utf-8", errors="replace") as f:
             content = f.read()
-        if f"<address>{WAZUH_MANAGER}</address>" in content:
+        if f"<endpoint>{WAZUH_MANAGER_ENDPOINT}</endpoint>" in content:
             return
     except Exception:
         return
-    logger.warning(f"ossec.conf has wrong manager address — patching to {WAZUH_MANAGER}")
+    logger.warning(f"ossec.conf has wrong manager endpoint — patching to {WAZUH_MANAGER_ENDPOINT}")
     patch_cmd = (
         f"(Get-Content {_ps_quote(_OSSEC_CONF)}) "
-        f"-replace '<address>.*</address>', '<address>{_ps_escape_path(WAZUH_MANAGER)}</address>' | "
+        f"-replace '<endpoint>.*</endpoint>', '<endpoint>{_ps_escape_path(WAZUH_MANAGER_ENDPOINT)}</endpoint>' | "
         f"Set-Content {_ps_quote(_OSSEC_CONF)}"
     )
     _run_privileged(patch_cmd)
@@ -588,13 +597,18 @@ def reenroll_agent():
     base = get_agent_name()
     new_name = f"{base}-{str(int(time.time()))[-6:]}"
     group = get_agent_group()
+    # The Phoenix API answers with the manager's current key for this device
+    # (a new agent if the old one was deleted there); else agent-auth.
+    enrolled = enrollment.request(new_name)
+    if enrolled:
+        new_name = enrolled.agent_name
+        group = enrolled.group
 
     script = (
         f"Stop-Service -Name {_ps_quote(_SERVICE_NAME)} -Force -ErrorAction SilentlyContinue; "
         f"Remove-Item -Path {_ps_quote(_CLIENT_KEYS)},{_ps_quote(_KEY_BACKUP)} -Force "
         f"-ErrorAction SilentlyContinue; "
-        f"if (Test-Path {_ps_quote(_AGENT_AUTH)}) {{ & {_ps_quote(_AGENT_AUTH)} -m {_ps_quote(WAZUH_MANAGER)} "
-        f"-p {_ps_quote(WAZUH_REGISTRATION_PORT)} -A {_ps_quote(new_name)} -G {_ps_quote(group)} }}; "
+        f"{_register_ps(enrolled, new_name, group)}; "
         f"if (-not (Test-Path {_ps_quote(_CLIENT_KEYS)}) -or "
         f"((Get-Item {_ps_quote(_CLIENT_KEYS)}).Length -eq 0)) "
         f"{{ Write-Output 'REENROLL_NO_KEY'; exit 1 }}; "
@@ -608,6 +622,7 @@ def reenroll_agent():
         f"Write-Output 'REENROLL_OK'"
     )
     success, output = _run_privileged(script)
+    enrollment.discard(enrolled)
     if success and "REENROLL_OK" in (output or "") \
             and "REENROLL_NO_KEY" not in (output or ""):
         logger.info(f"Wazuh re-enrolled under fresh name {new_name}")
@@ -639,9 +654,8 @@ def remove_agent(wipe_keys: bool = False):
     script = (
         f"NET STOP {_SERVICE_NAME} 2>$null; "
         f"{key_phase}"
-        # Uninstall via MSI product code lookup
-        f"$app = Get-WmiObject -Class Win32_Product | Where-Object {{ $_.Name -like '*Wazuh*' }}; "
-        f"if ($app) {{ $app.Uninstall() }}; "
+        # Uninstall the MSI, so Windows no longer counts the agent as installed
+        f"{_PS_UNINSTALL_AGENT_MSI}; "
         # Fallback: remove directory
         f"if (Test-Path {_ps_quote(WINDOWS_WAZUH_DIR)}) {{ Remove-Item -Recurse -Force {_ps_quote(WINDOWS_WAZUH_DIR)} }}"
     )
@@ -653,7 +667,66 @@ def remove_agent(wipe_keys: bool = False):
     return success
 
 
-def _build_install_script(sysmon, msi_path, agent_name, agent_group, backup_dir):
+# Uninstalls every registered agent MSI (ours is "Phoenix Agent"; older ones
+# "Wazuh Agent ...") by product code, read from the Uninstall registry keys.
+# Win32_Product is avoided: it is slow and makes Windows check every MSI.
+_PS_UNINSTALL_AGENT_MSI = (
+    "Get-ItemProperty "
+    "'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',"
+    "'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' "
+    "-ErrorAction SilentlyContinue | "
+    "Where-Object { $_.DisplayName -eq 'Phoenix Agent' -or $_.DisplayName -like 'Wazuh Agent*' } | "
+    "ForEach-Object { if ($_.PSChildName -match '^\\{[0-9A-Fa-f-]{36}\\}$') { "
+    "Start-Process -FilePath 'msiexec.exe' -Wait -ArgumentList @('/x', $_.PSChildName, '/qn', '/norestart') } }"
+)
+
+
+def _msi_log_path(msi_path):
+    """Where msiexec writes its verbose log for *msi_path* (next to the package)."""
+    return os.path.splitext(msi_path)[0] + "-install.log"
+
+
+_MSI_EXIT_MEANING = {
+    1602: "the install was cancelled",
+    1603: "the installer hit a fatal error",
+    1618: "another installation is already running",
+    1638: "another version of the agent is already installed",
+    1925: "the installer needs administrator rights",
+}
+
+
+def msi_failure_summary(log_path, max_lines=25):
+    """Explain a failed MSI install from its verbose log, for our own log.
+
+    Returns "" when there is no log. Otherwise the exit code (from the
+    "MainEngineThread is returning N" line) and the lines before the first
+    "Return value 3", which is where Windows Installer records the failing
+    action and its error.
+    """
+    try:
+        with open(log_path, encoding="utf-16", errors="replace") as f:
+            lines = f.read().splitlines()
+    except UnicodeError:
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return ""
+    code = None
+    for line in lines:
+        m = re.search(r"MainEngineThread is returning (\d+)", line)
+        if m:
+            code = int(m.group(1))
+    summary = [f"msiexec exit code {code}"
+               + (f" ({_MSI_EXIT_MEANING[code]})" if code in _MSI_EXIT_MEANING else "")
+               if code is not None else "msiexec exit code unknown"]
+    for i, line in enumerate(lines):
+        if "Return value 3" in line:
+            summary += [x for x in lines[max(0, i - max_lines):i + 1] if x.strip()]
+            break
+    return "\n".join(summary)
+
+
+def _build_install_script(sysmon, msi_path, agent_name, agent_group, backup_dir, enrolled=None):
     """Assemble ONE elevated PowerShell script for every privileged install step.
 
     Batching the Sysmon install, the Wazuh MSI, the ossec.conf patch +
@@ -686,6 +759,8 @@ def _build_install_script(sysmon, msi_path, agent_name, agent_group, backup_dir)
         _ps_quote(f"WAZUH_REGISTRATION_PORT={WAZUH_REGISTRATION_PORT}"),
         _ps_quote(f"WAZUH_AGENT_NAME={agent_name}"),
         _ps_quote(f"WAZUH_AGENT_GROUP={agent_group}"),
+        "'/l*v'",
+        _ps_quote(_msi_log_path(msi_path)),
     ])
 
     parts = ["$ErrorActionPreference = 'Continue'"]
@@ -693,6 +768,14 @@ def _build_install_script(sysmon, msi_path, agent_name, agent_group, backup_dir)
     # Sysmon (optional — folded in only if it downloaded successfully).
     if sysmon:
         parts.append(_guard(_sysmon_install_ps(sysmon)))
+
+    # An agent MSI still registered without its files (its folder was deleted
+    # by hand, or by an older uninstall) makes msiexec /i a silent no-op.
+    # Uninstall that registration first.
+    parts.append(_guard(
+        f"if (-not (Test-Path {_ps_quote(os.path.join(WINDOWS_WAZUH_DIR, 'wazuh-agent.exe'))})) "
+        f"{{ {_PS_UNINSTALL_AGENT_MSI} }}"
+    ))
 
     # Wazuh MSI — wait for full completion before configuring/enrolling.
     parts.append(_guard(
@@ -705,11 +788,11 @@ def _build_install_script(sysmon, msi_path, agent_name, agent_group, backup_dir)
         f"Stop-Service -Name {_ps_quote(_SERVICE_NAME)} -Force -ErrorAction SilentlyContinue"
     ))
 
-    # Patch manager address + agent name in ossec.conf.
+    # Patch manager endpoint + agent name in ossec.conf.
     parts.append(_guard(
         f"if (Test-Path {_ps_quote(_OSSEC_CONF)}) {{ "
         f"(Get-Content {_ps_quote(_OSSEC_CONF)}) "
-        f"-replace '<address>.*</address>', '<address>{_ps_escape_path(WAZUH_MANAGER)}</address>' "
+        f"-replace '<endpoint>.*</endpoint>', '<endpoint>{_ps_escape_path(WAZUH_MANAGER_ENDPOINT)}</endpoint>' "
         f"-replace '<agent_name>.*</agent_name>', '<agent_name>{_ps_escape_path(agent_name)}</agent_name>' | "
         f"Set-Content {_ps_quote(_OSSEC_CONF)} }}"
     ))
@@ -720,13 +803,8 @@ def _build_install_script(sysmon, msi_path, agent_name, agent_group, backup_dir)
         ("Microsoft-Windows-Windows Defender/Operational", _DEFENDER_LOCALFILE_BLOCK),
     ])))
 
-    # Enroll with the manager (writes client.keys).
-    parts.append(_guard(
-        f"if (Test-Path {_ps_quote(_AGENT_AUTH)}) {{ "
-        f"& {_ps_quote(_AGENT_AUTH)} -m {_ps_quote(WAZUH_MANAGER)} "
-        f"-p {_ps_quote(WAZUH_REGISTRATION_PORT)} "
-        f"-A {_ps_quote(agent_name)} -G {_ps_quote(agent_group)} }}"
-    ))
+    # Enroll (writes client.keys): the key from the Phoenix API, or agent-auth.
+    parts.append(_guard(_register_ps(enrolled, agent_name, agent_group)))
 
     # Back up client.keys for future repair/recovery.
     parts.append(_guard(
@@ -761,21 +839,29 @@ def full_install(progress_callback=None):
         _p("Download failed")
         return False
 
-    # Agent name/group (server-side group auto-created on enroll).
+    # Agent name/group. The Phoenix API enrolls server side, in the user's
+    # group; without it agent-auth registers with this group.
     agent_name = get_agent_name()
     agent_group = get_agent_group()
+    enrolled = enrollment.request(agent_name)
+    if enrolled:
+        agent_name = enrolled.agent_name
+        agent_group = enrolled.group
     backup_dir = os.path.dirname(_KEY_BACKUP)
 
     # --- Single elevated batch: one UAC prompt for the whole install ---
     _p("Installing — please approve the administrator prompt...")
     script = _build_install_script(
-        sysmon, msi_path, agent_name, agent_group, backup_dir)
+        sysmon, msi_path, agent_name, agent_group, backup_dir, enrolled)
     success, output = _run_privileged(script, timeout=600)
+    enrollment.discard(enrolled)
     logger.info(f"[WAZUH] combined install ok={success} output={output!r}")
 
     if not is_agent_installed():
         logger.error(f"Install failed (agent not present): {output}")
-        _p(get_text("wazuh.installation_failed"))
+        why = msi_failure_summary(_msi_log_path(msi_path))
+        logger.error(f"[WAZUH] MSI log {_msi_log_path(msi_path)}:\n{why or 'no MSI log written'}")
+        _p("Installation failed")
         return False
 
     # --- Unprivileged verify (no prompt) ---
@@ -791,7 +877,7 @@ def full_install(progress_callback=None):
         logger.info("Wazuh agent installed and running")
         _p("Wazuh agent installed and running")
     else:
-        logger.warning(get_text("wazuh.agent.wazuh_functions_windows.agent_installed_but_not_yet"))
+        logger.warning("Agent installed but not yet running")
         _p("Wazuh agent installed (may need manual start)")
 
     # Record enrollment email
