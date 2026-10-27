@@ -181,7 +181,7 @@ class Plugin(BasePlugin):
         self.transport_combo = _NoScrollComboBox()
         self.transport_combo.addItem("OpenAI API (HTTPS)", "openai")
         self.transport_combo.addItem("Matrix (end-to-end encrypted)", "matrix")
-        current = settings.get("chat", "transport") or "openai"
+        current = settings.get("chat", "transport") or "matrix"
         self.transport_combo.setCurrentIndex(
             max(0, self.transport_combo.findData(current)))
         lay.addWidget(SettingRow(

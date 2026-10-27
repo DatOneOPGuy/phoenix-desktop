@@ -377,7 +377,7 @@ class TestSettingsTransportCard:
         from utils import settings
 
         p = self._card(qapp)
-        assert p.transport_combo.currentData() == "openai"
+        p.transport_combo.setCurrentIndex(p.transport_combo.findData("openai"))
         assert p.matrix_bot_entry.isHidden() and not p.api_base_entry.isHidden()
         p.transport_combo.setCurrentIndex(p.transport_combo.findData("matrix"))
         assert p.api_base_entry.isHidden() and not p.matrix_bot_entry.isHidden()
