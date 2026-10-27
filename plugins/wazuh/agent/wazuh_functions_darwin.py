@@ -101,8 +101,6 @@ def needs_reenrollment():
     return False
 
 
-_RESISTINE_API_BASE = "https://validate.resistine.work"
-
 
 def get_package_url():
     """Manifest URL of the Phoenix agent .pkg, or None (built for arm64 only)."""
