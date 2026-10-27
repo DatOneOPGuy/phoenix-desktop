@@ -692,7 +692,7 @@ class Plugin(BasePlugin):
 
     def reinitialize_client(self, notify: bool = False):
         """Rebuild the chat client (OpenAI API or Matrix) from settings."""
-        self.transport = settings.get("chat", "transport") or "openai"
+        self.transport = settings.get("chat", "transport") or "matrix"
         if self.transport == "matrix":
             self._init_matrix_client()
             try:
@@ -1406,7 +1406,7 @@ class Plugin(BasePlugin):
             f"background: transparent;")
         lay.addWidget(icon)
 
-        matrix = getattr(self, "transport", "openai") == "matrix"
+        matrix = getattr(self, "transport", "matrix") == "matrix"
         signin = getattr(self, "_matrix_problem", None) == "signin"
         title = QLabel(
             ("Sign-in Required" if signin else "Matrix Chat Unavailable")
@@ -1870,7 +1870,7 @@ class Plugin(BasePlugin):
             btn.setEnabled(False)
         elif self.client is None:
             entry.setEnabled(False)
-            if getattr(self, "transport", "openai") != "matrix":
+            if getattr(self, "transport", "matrix") != "matrix":
                 hint = "API key required — see Settings"
             elif getattr(self, "_matrix_problem", None) == "signin":
                 hint = "Sign in with your Phoenix account to use Matrix chat"

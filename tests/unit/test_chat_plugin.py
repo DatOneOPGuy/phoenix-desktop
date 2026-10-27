@@ -42,8 +42,9 @@ def openai_cls(monkeypatch):
 
 @pytest.fixture()
 def plugin(isolated_settings, openai_cls):
-    """Chat Plugin on the default (OpenAI-compatible) transport."""
+    """Chat Plugin on the OpenAI-compatible transport (the default is Matrix)."""
     from plugins.chat.main import Plugin
+    isolated_settings.set("chat", "transport", "openai")
     return Plugin(MagicMock())
 
 
