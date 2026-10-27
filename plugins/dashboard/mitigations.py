@@ -309,6 +309,7 @@ def detail_line(item: dict) -> str:
 _STATE_TEXT = {
     OPEN: "The vulnerable version is still installed here.",
     FIXED_HERE: "Fixed on this machine. The next daily scan confirms it and the item disappears.",
+    REBOOT: "The fixed kernel is installed, but the vulnerable one is still running. Restart to finish.",
     UNKNOWN: "Phoenix can't check this item on this machine.",
     SERVER: "Only the next daily scan can tell whether this is fixed.",
     REMOTE: "Fix this on that machine; its next daily scan confirms it.",
@@ -318,11 +319,6 @@ _STATE_TEXT = {
 
 def state_text(state) -> str:
     return _STATE_TEXT.get(state, _STATE_TEXT[None])
-
-
-_DEB_KERNEL = re.compile(r"linux-(?:image(?:-unsigned)?|modules(?:-extra)?)-\d[A-Za-z0-9.+_~-]*")
-_RPM_KERNEL = {"kernel", "kernel-core", "kernel-modules", "kernel-modules-core",
-               "kernel-modules-extra", "kernel-default", "kernel-uek"}
 
 
 def _is_kernel(c: dict) -> bool:
