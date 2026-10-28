@@ -223,10 +223,12 @@ def _make_agent_state_readable():
     'unknown'. Make the dirs traversable and the files world-readable so
     get_agent_connection() can report connected/pending/disconnected. Guarded so
     a permissions quirk never fails the enroll. (wazuh-agentd truncate-writes
-    the state file, so the mode persists across updates.)
+    the state file, so the mode persists across updates.) The Phoenix packages
+    leave the install dir itself 0750, so it gets search (not read) permission.
     """
     run = f"{LINUX_WAZUH_DIR}/var/run"
     return (
+        f"chmod o+x '{LINUX_WAZUH_DIR}' 2>/dev/null || true; "
         f"chmod o+rx '{LINUX_WAZUH_DIR}/var' '{run}' '{LINUX_WAZUH_DIR}/logs' 2>/dev/null || true; "
         f"chmod o+r '{run}/wazuh-agentd.state' 2>/dev/null || true; "
         f"chmod o+r '{LINUX_WAZUH_DIR}/logs/ossec.log' 2>/dev/null || true"
