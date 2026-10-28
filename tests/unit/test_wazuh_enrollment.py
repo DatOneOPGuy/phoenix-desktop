@@ -161,10 +161,10 @@ def _enrolled(tmp_path):
 
 @pytest.mark.unit
 class TestLinuxInstall:
-    def _script(self, enrolled):
+    def _script(self, enrolled, family="deb", pkg="/tmp/p.deb"):
         from plugins.wazuh.agent import wazuh_functions_linux as wl
-        with patch.object(wl, "download_package", return_value="/tmp/p.deb"), \
-                patch.object(wl, "_get_os_info", return_value="deb"), \
+        with patch.object(wl, "download_package", return_value=pkg), \
+                patch.object(wl, "_get_os_info", return_value=family), \
                 patch.object(wl, "get_agent_name", return_value="host-uuid"), \
                 patch.object(wl, "get_agent_group", return_value="grp"), \
                 patch.object(wl.enrollment, "request", return_value=enrolled), \
@@ -184,6 +184,15 @@ class TestLinuxInstall:
         assert "WAZUH_AGENT_GROUP='u_alice'" in script     # and its group
         assert "<groups>u_alice</groups>" in script and "'grp'" not in script
         assert LINE not in script  # the key itself never goes on a command line
+
+    def test_arch_installs_the_package_with_pacman(self, tmp_path):
+        # The Arch package runs the .deb's maintainer scripts, so it gets the
+        # same deployment variables (endpoint, name, group) dpkg does.
+        script = self._script(_enrolled(tmp_path), "arch", "/tmp/p.pkg.tar.zst")
+        assert "WAZUH_MANAGER='dashboard.phoenix.exposed' WAZUH_MANAGER_PORT='1517'" in script
+        assert "pacman -U --noconfirm '/tmp/p.pkg.tar.zst'" in script
+        assert "<endpoint>dashboard.phoenix.exposed:1517</endpoint>" in script
+        assert "bsdtar" not in script and "/var/ossec" not in script
 
     def test_fallback_agent_auth(self):
         script = self._script(None)

@@ -402,8 +402,8 @@ class TestLinuxDownload:
             assert wf.download_package() == str(tmp_path / "a.deb")
         assert dl.call_args.args[0] == str(tmp_path)
 
-    @pytest.mark.parametrize("os_type", ["arch", None])
-    def test_no_package_without_deb_or_rpm(self, os_type):
+    @pytest.mark.parametrize("os_type", [None])
+    def test_no_package_for_an_unknown_family(self, os_type):
         from plugins.wazuh.agent import wazuh_functions_linux as wf
 
         with patch.object(wf, "_get_os_info", return_value=os_type), \
