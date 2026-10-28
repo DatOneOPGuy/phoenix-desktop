@@ -1,4 +1,5 @@
-"""Linux agent package choice: .deb for Debian/Ubuntu, .rpm for Fedora/RHEL/openSUSE."""
+"""Linux agent package choice: .deb for Debian/Ubuntu, .rpm for Fedora/RHEL/openSUSE,
+.pkg.tar.zst for Arch."""
 
 from unittest.mock import patch
 
@@ -8,7 +9,8 @@ from plugins.wazuh.agent import wazuh_functions_linux as w
 
 
 @pytest.mark.parametrize("family,plat", [
-    ("deb", "linux-amd64"), ("rpm", "linux-amd64-rpm"), ("arch", None), (None, None)])
+    ("deb", "linux-amd64"), ("rpm", "linux-amd64-rpm"), ("arch", "linux-amd64-arch"),
+    (None, None)])
 def test_package_platform_by_family(family, plat):
     with patch.object(w.phoenix_packages, "platform_key", return_value="linux-amd64"), \
             patch.object(w, "_get_os_info", return_value=family):

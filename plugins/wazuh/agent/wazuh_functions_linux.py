@@ -20,6 +20,7 @@ from gui.dialogs import CTkPasswordDialog
 from plugins.wazuh.agent import enrollment, phoenix_packages
 from plugins.wazuh.config import (
     WAZUH_MANAGER,
+    WAZUH_MANAGER_ENDPOINT,
     WAZUH_MANAGER_PORT,
     WAZUH_PROTOCOL,
     WAZUH_REGISTRATION_PORT,
@@ -250,14 +251,15 @@ def _get_os_info():
     return None
 
 # Package store platform per package family (amd64 only).
-_PACKAGE_PLATFORMS = {"deb": "linux-amd64", "rpm": "linux-amd64-rpm"}
+_PACKAGE_PLATFORMS = {"deb": "linux-amd64", "rpm": "linux-amd64-rpm",
+                      "arch": "linux-amd64-arch"}
 
 
 def package_platform():
     """The package store platform for this machine, or None when none is built.
 
     Debian/Ubuntu get the .deb (linux-amd64), Fedora/RHEL/openSUSE the .rpm
-    (linux-amd64-rpm).
+    (linux-amd64-rpm), Arch the .pkg.tar.zst (linux-amd64-arch).
     """
     if phoenix_packages.platform_key() != "linux-amd64":
         return None
@@ -347,14 +349,14 @@ def get_agent_connection():
 _DOWNLOAD_TIMEOUT = 60  # seconds per socket operation
 
 def download_package(progress_callback=None):
-    """Download the signed Phoenix agent .deb or .rpm (needs a Phoenix sign-in).
+    """Download the signed Phoenix agent .deb, .rpm or Arch package (needs a Phoenix sign-in).
 
     Returns the verified local path, or None.
     """
     plat = package_platform()
     if not plat:
-        msg = ("Phoenix builds the Linux agent for Debian/Ubuntu and "
-               "Fedora/RHEL/openSUSE (amd64) only.")
+        msg = ("Phoenix builds the Linux agent for Debian/Ubuntu, "
+               "Fedora/RHEL/openSUSE and Arch (amd64) only.")
         logger.error(msg)
         if progress_callback:
             progress_callback(msg)
@@ -473,13 +475,16 @@ def build_remove_script(wipe_keys: bool = False) -> str:
 
     # --- Package removal + orphan user/group cleanup ---
     # Recognized package managers run postrm/postun hooks that drop the wazuh
-    # user/group, so we let them handle it. Arch and the no-package-manager
-    # fallback are extraction-based, so they must remove the user/group by hand.
+    # user/group, so we let them handle it. Arch (older installs were
+    # extracted) and the no-package-manager fallback remove them by hand.
     manual_user_cleanup = (
         "userdel wazuh 2>/dev/null || true; groupdel wazuh 2>/dev/null || true"
     )
     if os_type == "arch":
-        pkg_remove = ""
+        # The Phoenix Arch package is pacman-managed; an older bsdtar
+        # extraction is not, so the user/group are still dropped by hand.
+        pkg_remove = ("pacman -Q wazuh-agent >/dev/null 2>&1 && "
+                      "pacman -R --noconfirm wazuh-agent || true")
         cleanup_users = manual_user_cleanup
     elif pkg_mgr == "apt":
         pkg_remove = "apt-get remove -y wazuh-agent || true"
@@ -534,8 +539,8 @@ def remove_agent(wipe_keys: bool = False):
 
     * Package-managed installs (deb/rpm/zypper) are removed by the package
       manager, whose postrm/postun hooks drop the wazuh user and group.
-    * Arch installs are bsdtar-extracted and tracked by no package manager, so
-      they are always torn down by path with a manual user/group cleanup.
+    * Arch installs are removed with pacman when it tracks them (the Phoenix
+      package), then torn down by path with a manual user/group cleanup.
     * Hosts with no recognized package manager fall back to the same manual
       teardown as Arch (the install can only have been extraction-based).
 
@@ -596,15 +601,16 @@ def full_install(progress_callback=None):
         # dnf/zypper pull in the package's dependencies; rpm -U also upgrades.
         install_cmd = _rpm_install_cmd(deploy_env, pkg_path)
     elif os_type == "arch":
-        # No postinst runs when extracting with bsdtar — create the wazuh user/group, extract,
-        # fix ownership, then stamp manager + group into ossec.conf manually
+        # The Arch package carries the .deb's maintainer scripts as its
+        # .INSTALL, so pacman creates the wazuh user and writes the endpoint
+        # and CA into ossec.conf like dpkg does. It is unsigned, hence the
+        # signed-manifest check before this runs; -U also upgrades. Should the
+        # deployment variables not reach the scriptlet, the shipped
+        # placeholder endpoint is replaced here.
         install_cmd = (
-            "(getent group wazuh >/dev/null || groupadd --system wazuh) && "
-            "(getent passwd wazuh >/dev/null || useradd --system --no-create-home "
-            "--home /var/ossec --shell /sbin/nologin -g wazuh wazuh) && "
-            f"bsdtar -xpf '{pkg_path}' -C / && "
-            "chown -R wazuh:wazuh /var/ossec && "
-            f"sed -i \"s|<address>.*</address>|<address>{WAZUH_MANAGER}</address>|\" '{ossec_conf}'"
+            f"{deploy_env} pacman -U --noconfirm '{pkg_path}' && "
+            f"sed -i 's|<endpoint>MANAGER_IP</endpoint>|<endpoint>{WAZUH_MANAGER_ENDPOINT}</endpoint>|' "
+            f"'{ossec_conf}'"
         )
 
     agent_auth = f"{LINUX_WAZUH_DIR}/bin/agent-auth"
