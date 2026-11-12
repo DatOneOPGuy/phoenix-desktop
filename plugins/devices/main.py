@@ -207,8 +207,10 @@ class Plugin(BasePlugin):
 
     def __init__(self, app):
         super().__init__(
-            id="013",
-            version="2026.11.04",
+            # 013 belongs to the Alerts plugin; a duplicate id makes the
+            # manager silently drop one of the two plugins.
+            id="014",
+            version="2026.11.12",
             order=5.5,
             name="Devices",
             status=None,
