@@ -565,3 +565,142 @@ class TestMatrixUnavailableReason:
         from plugins.chat.main import Plugin
         p = Plugin(MagicMock())
         assert p.client is None and p._matrix_problem == "signin"
+
+
+class _Dev:
+    """Stand-in for nio's OlmDevice."""
+
+    def __init__(self, device_id, ed25519, verified=False, blacklisted=False):
+        self.id = device_id
+        self.ed25519 = ed25519
+        self.verified = verified
+        self.blacklisted = blacklisted
+
+
+class _Store:
+    def __init__(self, devices):
+        self._devices = devices
+
+    def active_user_devices(self, _user):
+        return iter(self._devices)
+
+
+def _transport(devices, bot="@bot:example.org", user="@me:example.org"):
+    """A MatrixService wired to a fake nio client with *devices* for the bot."""
+    t = mt.MatrixService.__new__(mt.MatrixService)
+    t.bot = bot
+    t.user_id = user
+    client = MagicMock()
+    client.should_query_keys = False
+    client.device_store = _Store(devices)
+    client.verify_device = MagicMock(
+        side_effect=lambda d: setattr(d, "verified", True))
+    client.blacklist_device = MagicMock(
+        side_effect=lambda d: setattr(d, "blacklisted", True))
+    t._client = client
+    return t, client
+
+
+@pytest.mark.unit
+@pytest.mark.security
+class TestBotDevicePinning:
+    """The homeserver must not be able to add a device and read prompts."""
+
+    def test_first_use_pins_and_verifies(self, isolated_settings):
+        from utils import settings
+        import asyncio
+
+        dev = _Dev("DEV1", "key-1")
+        t, client = _transport([dev])
+        asyncio.run(t._pinned_bot_devices())
+
+        assert settings.get("chat", mt._PINNED_DEVICES_KEY) == {"DEV1": "key-1"}
+        assert dev.verified
+        client.verify_device.assert_called_once()
+
+    def test_changed_key_for_pinned_device_is_refused(self, isolated_settings):
+        from utils import settings
+        import asyncio
+
+        settings.set("chat", mt._PINNED_DEVICES_KEY, {"DEV1": "key-1"})
+        t, _ = _transport([_Dev("DEV1", "key-SWAPPED")])
+
+        with pytest.raises(MatrixTransportError, match="changed"):
+            asyncio.run(t._pinned_bot_devices())
+
+    def test_unpinned_device_is_blacklisted_not_trusted(self, isolated_settings):
+        from utils import settings
+        import asyncio
+
+        settings.set("chat", mt._PINNED_DEVICES_KEY, {"DEV1": "key-1"})
+        known, rogue = _Dev("DEV1", "key-1"), _Dev("ROGUE", "key-2")
+        t, _ = _transport([known, rogue])
+        asyncio.run(t._pinned_bot_devices())
+
+        assert known.verified, "the pinned device must stay usable"
+        assert rogue.blacklisted, "an unpinned device must not receive keys"
+        assert not rogue.verified
+        # The rogue device is never silently added to the pin set.
+        assert settings.get("chat", mt._PINNED_DEVICES_KEY) == {"DEV1": "key-1"}
+
+    def test_no_pinned_device_present_fails_closed(self, isolated_settings):
+        from utils import settings
+        import asyncio
+
+        settings.set("chat", mt._PINNED_DEVICES_KEY, {"DEV1": "key-1"})
+        t, _ = _transport([_Dev("OTHER", "key-9")])
+
+        with pytest.raises(MatrixTransportError, match="are trusted"):
+            asyncio.run(t._pinned_bot_devices())
+
+    def test_no_devices_at_all_fails_closed(self, isolated_settings):
+        import asyncio
+
+        t, _ = _transport([])
+        with pytest.raises(MatrixTransportError, match="no encryption devices"):
+            asyncio.run(t._pinned_bot_devices())
+
+    def test_clear_pinned_devices_allows_retrust(self, isolated_settings):
+        from utils import settings
+        import asyncio
+
+        settings.set("chat", mt._PINNED_DEVICES_KEY, {"DEV1": "key-1"})
+        t, _ = _transport([_Dev("NEW", "key-new")])
+        t.clear_pinned_devices()
+        asyncio.run(t._pinned_bot_devices())
+        assert settings.get("chat", mt._PINNED_DEVICES_KEY) == {"NEW": "key-new"}
+
+
+@pytest.mark.unit
+@pytest.mark.security
+class TestPrivateDmMembership:
+    """A saved room is only reused when it holds exactly the user and the bot."""
+
+    def _room(self, users, invited=()):
+        r = MagicMock()
+        r.room_id = "!r:example.org"
+        r.users = {u: object() for u in users}
+        r.invited_users = {u: object() for u in invited}
+        return r
+
+    def test_exact_membership_accepted(self):
+        t, _ = _transport([])
+        assert t._is_private_dm(
+            self._room(["@me:example.org", "@bot:example.org"]))
+
+    def test_extra_joined_member_rejected(self):
+        t, _ = _transport([])
+        assert not t._is_private_dm(
+            self._room(["@me:example.org", "@bot:example.org",
+                        "@snoop:example.org"]))
+
+    def test_invited_but_unjoined_member_rejected(self):
+        """An invitee can join later and read keys already shared."""
+        t, _ = _transport([])
+        assert not t._is_private_dm(
+            self._room(["@me:example.org", "@bot:example.org"],
+                       invited=["@snoop:example.org"]))
+
+    def test_missing_bot_rejected(self):
+        t, _ = _transport([])
+        assert not t._is_private_dm(self._room(["@me:example.org"]))

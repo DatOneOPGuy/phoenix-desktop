@@ -150,10 +150,32 @@ class TestBrowserLogin:
         assert form["code"] == "CODE" and form["code_verifier"]
         assert form["redirect_uri"] == q["redirect_uri"]
 
-    def test_state_mismatch_rejected(self, mas):
-        with pytest.raises(oidc.OIDCError, match="state"):
+    def test_state_mismatch_is_ignored_not_accepted(self, mas, monkeypatch):
+        """A callback with the wrong state must not end the pending login.
+
+        Any local process can reach the loopback port. If such a request were
+        accepted and only rejected afterwards, it would be a reliable way to
+        cancel somebody's sign-in. The handler now 404s it and keeps waiting,
+        so the login ends on its own timeout instead.
+        """
+        monkeypatch.setattr(oidc, "_LOGIN_TIMEOUT", 1)
+        with pytest.raises(oidc.OIDCError, match="timed out"):
             oidc.login_browser(open_url=lambda u: self._hit_callback(
                 u, lambda p: p.update(state="evil")))
+
+    def test_mismatched_issuer_rejected(self, mas):
+        """RFC 9207: an `iss` that is not the discovered issuer is refused."""
+        with pytest.raises(oidc.OIDCError, match="unexpected provider"):
+            oidc.login_browser(open_url=lambda u: self._hit_callback(
+                u, lambda p: p.update(iss="https://evil.example.com")))
+
+    def test_matching_issuer_accepted(self, mas):
+        """An `iss` equal to the discovered issuer passes (trailing slash ok)."""
+        mas.token_responses.append(_resp(200, _token_body()))
+        issuer = oidc.discover(oidc._session())["issuer"]
+        tokens = oidc.login_browser(open_url=lambda u: self._hit_callback(
+            u, lambda p: p.update(iss=issuer + "/")))
+        assert tokens.access_token == "AT"
 
     def test_error_from_server(self, mas):
         def deny(p):

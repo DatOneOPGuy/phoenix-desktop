@@ -36,7 +36,10 @@ STAGE_DIR="${BUILD_DIR:-/tmp/phoenix-build}/desktop-windows"
 GOLDEN_DIR="${GOLDEN_DIR:-/var/lib/phoenix-win/golden}"
 KEY="${WIN_BUILDER_KEY:-$HOME/.ssh/phoenix-win-builder}"
 OUTPUT_DIR="${PACKAGE_OUTPUT:-$ROOT/dist/installers}"
-DOCKUR_IMAGE="${DOCKUR_IMAGE:-dockurr/windows:6.05}"
+# Pinned by digest, not just tag: a tag can be repointed at a new image, and
+# this one runs with --device /dev/kvm and NET_ADMIN on the build host.
+# To update: docker manifest inspect dockurr/windows:<tag> and bump both.
+DOCKUR_IMAGE="${DOCKUR_IMAGE:-dockurr/windows:6.05@sha256:0cff9eb0e7aee9953e55bc682852ca4fdca233145a58ae1ec94f0b0c01a2ed30}"
 VM_NAME="phoenix-desktop-win-build-${CI_JOB_ID:-$$}"
 VM_DIR="${VM_DIR:-$STAGE_DIR/vm}"
 
@@ -82,7 +85,29 @@ docker run -d --name "$VM_NAME" \
     -v "$VM_DIR":/storage --stop-timeout 120 "$DOCKUR_IMAGE" >/dev/null
 ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$VM_NAME")"
 [ -n "$ip" ] || die "no IP for $VM_NAME"
-SSH_OPTS=(-i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o LogLevel=ERROR)
+# The VM is a copy of the golden image, so its SSH host key is the same on
+# every run and can be pinned. Without pinning, anything able to answer on the
+# container's IP could receive the source zip and hand back an installer we
+# would then ship. HostKeyAlias keeps the pin stable even though the container
+# IP changes per run.
+#
+# First run records the key (TOFU); later runs require it to match. If the
+# golden image is rebuilt the key changes and the build stops with a clear
+# error — delete $WIN_KNOWN_HOSTS to re-pin deliberately.
+WIN_KNOWN_HOSTS="${WIN_KNOWN_HOSTS:-$GOLDEN_DIR/phoenix-golden.known_hosts}"
+HOST_KEY_ALIAS="phoenix-windows-golden"
+if [ -s "$WIN_KNOWN_HOSTS" ]; then
+    strict_mode="yes"
+else
+    log "No pinned host key at $WIN_KNOWN_HOSTS — pinning this VM's key (TOFU)"
+    strict_mode="accept-new"
+    mkdir -p "$(dirname "$WIN_KNOWN_HOSTS")"
+    : > "$WIN_KNOWN_HOSTS"
+fi
+SSH_OPTS=(-i "$KEY" -o "HostKeyAlias=$HOST_KEY_ALIAS" \
+    -o "UserKnownHostsFile=$WIN_KNOWN_HOSTS" \
+    -o "StrictHostKeyChecking=$strict_mode" \
+    -o ConnectTimeout=10 -o LogLevel=ERROR)
 ssh_vm() { ssh "${SSH_OPTS[@]}" "phoenix@$ip" "$@"; }
 
 for i in $(seq 1 60); do

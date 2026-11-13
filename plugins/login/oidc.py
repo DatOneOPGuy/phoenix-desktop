@@ -231,6 +231,11 @@ h1{{color:#5AC8FA}}</style></head><body><div><h1>{title}</h1>
 class _CallbackServer(http.server.HTTPServer):
     result: Optional[dict] = None
     done: threading.Event
+    # The `state` this login is waiting for. Any other local process can reach
+    # the loopback port, and accepting the first GET that arrived would let it
+    # end the wait and cancel a pending sign-in. Only a request carrying the
+    # matching state is this login's redirect.
+    expected_state: str = ""
 
 
 class _CallbackHandler(http.server.BaseHTTPRequestHandler):
@@ -242,6 +247,12 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(404)
             return
         params = dict(urllib.parse.parse_qsl(url.query))
+        # Unguessable (128-bit) and sent to the browser only, so a local process
+        # that cannot read it cannot end this login.
+        if not secrets.compare_digest(params.get("state", ""),
+                                      self.server.expected_state):
+            self.send_error(404)
+            return
         http_trace.event("browser -> app: loopback redirect GET /callback", params)
         if self.server.result is None:
             self.server.result = params
@@ -281,6 +292,7 @@ def login_browser(cancel: Optional[threading.Event] = None,
         challenge = base64.urlsafe_b64encode(
             hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
         state = secrets.token_urlsafe(24)
+        server.expected_state = state
         url = meta["authorization_endpoint"] + "?" + urllib.parse.urlencode({
             "response_type": "code",
             "response_mode": "query",
@@ -310,6 +322,15 @@ def login_browser(cancel: Optional[threading.Event] = None,
 
     if params.get("state") != state:
         raise OIDCError("Sign-in response did not match the request (state).")
+    # RFC 9207: when the provider echoes `iss`, it must be the issuer we
+    # discovered. Guards against a mix-up attack where a response from a
+    # different (attacker-run) provider is replayed into this flow.
+    returned_iss = params.get("iss")
+    if returned_iss and returned_iss.rstrip("/") != meta["issuer"].rstrip("/"):
+        raise OIDCError(
+            "Sign-in response came from an unexpected provider. "
+            "Please try again."
+        )
     if "error" in params:
         raise OIDCError(params.get("error_description") or params["error"])
     r = _token_request(meta, {

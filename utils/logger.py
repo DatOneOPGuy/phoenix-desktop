@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import sys
+from urllib.parse import urlparse
 import threading
 import time
 
@@ -15,7 +16,7 @@ from opentelemetry.sdk.util.instrumentation import InstrumentationScope
 from opentelemetry.trace import get_current_span
 
 
-_DEFAULT_OTLP_ENDPOINT = "http://otel.phoenix.exposed:4318"
+_DEFAULT_OTLP_ENDPOINT = "https://otel.phoenix.exposed:4318"
 
 # Log shipping is off until the Phoenix collector (otel.phoenix.exposed) is
 # live; the old otel.resisti.net no longer resolves and the exporter filled
@@ -29,16 +30,65 @@ def _otlp_endpoint():
     return os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", _DEFAULT_OTLP_ENDPOINT)
 
 
+def _endpoint_is_secure(endpoint: str) -> bool:
+    """True if shipping logs to *endpoint* is acceptable.
+
+    Log records carry hostnames, usernames and file paths off the endpoint, so
+    plaintext HTTP would expose them to anyone on the path. Only https is
+    allowed, with an explicit carve-out for loopback so a developer can run a
+    local collector without inventing a certificate.
+    """
+    try:
+        parsed = urlparse(endpoint)
+    except ValueError:
+        return False
+    if parsed.scheme == "https":
+        return True
+    host = (parsed.hostname or "").lower()
+    return parsed.scheme == "http" and host in ("127.0.0.1", "::1", "localhost")
+
+
 def telemetry_enabled() -> bool:
     """Whether log records are shipped to the OTLP collector."""
     flag = os.environ.get("PHOENIX_TELEMETRY", "").strip().lower()
-    if flag in ("1", "true", "yes", "on"):
-        return True
     if flag in ("0", "false", "no", "off"):
         return False
-    if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
-        return True
-    return TELEMETRY_ENABLED
+    if flag in ("1", "true", "yes", "on"):
+        enabled = True
+    else:
+        enabled = (bool(os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"))
+                   or TELEMETRY_ENABLED)
+    if not enabled:
+        return False
+    # The transport check applies to every way telemetry can be switched on,
+    # including an explicit PHOENIX_TELEMETRY=1: an operator flag should not
+    # be able to put log records on the wire in cleartext.
+    endpoint = _otlp_endpoint()
+    if not _endpoint_is_secure(endpoint):
+        # Fail closed: ship nothing rather than ship it in the clear.
+        _warn_insecure_endpoint_once(endpoint)
+        return False
+    return True
+
+
+_insecure_endpoint_warned = False
+
+
+def _warn_insecure_endpoint_once(endpoint: str) -> None:
+    """Warn (to stderr, once) that telemetry is off for an insecure endpoint.
+
+    Deliberately not routed through loguru: this runs while logging is being
+    configured, and the endpoint is the thing being rejected.
+    """
+    global _insecure_endpoint_warned
+    if _insecure_endpoint_warned:
+        return
+    _insecure_endpoint_warned = True
+    print(
+        f"[telemetry] refusing to ship logs to {endpoint!r}: https is required "
+        "(http is allowed only for loopback). Telemetry is disabled.",
+        file=sys.stderr,
+    )
 
 
 # Loguru level name -> OTEL severity_number per OTEL log data model spec

@@ -8,6 +8,7 @@ Licensed under the GNU General Public License v2 or later
 """
 
 import base64
+import hashlib
 import os
 import platform
 import re
@@ -32,6 +33,7 @@ from plugins.wazuh.config import (
     WINDOWS_WAZUH_DIR,
     WINDOWS_SYSMON_ZIP_URL,
     WINDOWS_SYSMON_CONFIG_URL,
+    WINDOWS_SYSMON_CONFIG_SHA256,
 )
 
 _OSSEC_CONF = os.path.join(WINDOWS_WAZUH_DIR, "ossec.conf")
@@ -341,6 +343,27 @@ def _download_file(url, dest_path, progress_callback=None, label="Downloading...
         return False
 
 
+def _sha256_matches(path: str, expected: str) -> bool:
+    """True if the file at *path* hashes to *expected* (case-insensitive hex).
+
+    Reads in chunks so a large file never lands in memory whole. Any read
+    error is a mismatch: callers must treat an unverifiable file as untrusted.
+    """
+    try:
+        digest = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as e:
+        logger.error(f"[WAZUH] Could not hash {path}: {e}")
+        return False
+    actual = digest.hexdigest()
+    if actual.lower() != expected.lower():
+        logger.error(f"[WAZUH] Checksum mismatch for {path}: got {actual}")
+        return False
+    return True
+
+
 def _prepare_sysmon_download(progress_callback=None):
     """Download and extract Sysmon (no elevation needed).
 
@@ -382,6 +405,17 @@ def _prepare_sysmon_download(progress_callback=None):
 
     tmp_sysmon_config = os.path.join(tmp_sysmon, "sysmonconfig-export.xml")
     if not _download_file(WINDOWS_SYSMON_CONFIG_URL, tmp_sysmon_config, progress_callback, "Downloading Sysmon config..."):
+        return None
+
+    # The config is applied by an elevated Sysmon install and decides what the
+    # endpoint collects, so a tampered one could silently blind our telemetry.
+    # Fail closed: skip Sysmon entirely rather than apply an unverified config.
+    if not _sha256_matches(tmp_sysmon_config, WINDOWS_SYSMON_CONFIG_SHA256):
+        logger.error(
+            "[WAZUH] Sysmon config checksum mismatch — refusing to install it. "
+            "Expected %s. Sysmon will be skipped.",
+            WINDOWS_SYSMON_CONFIG_SHA256,
+        )
         return None
 
     return {"dir": tmp_sysmon, "exe": tmp_sysmon_exe, "config": tmp_sysmon_config}

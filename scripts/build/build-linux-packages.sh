@@ -16,7 +16,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
-IMAGE="almalinux:9"
+# Digest-pinned: these containers build and stage packages we then sign, so a
+# repointed tag would get its output signed by us. Update deliberately with
+# docker manifest inspect <image>:<tag>.
+IMAGE="almalinux:9@sha256:245f8aab832fe800aa42bdab5fad75ebbd8e0b4c9f24820a83c638b177857ae2"
 OUT="dist/linux"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/phoenix-linux.XXXXXX")"
 # The container writes the build tree as root; delete it from inside one.
@@ -128,7 +131,7 @@ cp packaging/linux/repo/phoenix.install "$OUT/phoenix.install"
 docker run --rm \
 	-v "$PWD/$OUT:/out" \
 	-e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" -e TARBALL="$TARBALL" \
-	archlinux:base-devel bash -euo pipefail -c '
+	archlinux:base-devel@sha256:fa2d4ce3310ddd90a4208e5168be8ad367da5129af1245f38fd2d803bcbe3239 bash -euo pipefail -c '
 useradd -m build
 install -d -o build /build
 cp /out/PKGBUILD /out/phoenix.install "/out/$TARBALL" /build/

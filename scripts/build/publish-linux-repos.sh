@@ -90,7 +90,7 @@ done
 # Unsigned metadata, in containers (each writes as root; hand it back).
 OWNER="$(id -u):$(id -g)"
 log "apt metadata (debian:12)"
-docker run --rm -v "$REPO/apt:/r" -e OWNER="$OWNER" debian:12 bash -euo pipefail -c '
+docker run --rm -v "$REPO/apt:/r" -e OWNER="$OWNER" debian:12@sha256:268fb24c39bca92d326dd83ea3abebe4a3f7751c804ffef23bb6d857dd343ff8 bash -euo pipefail -c '
 apt-get update -qq >/dev/null && apt-get install -y -qq apt-utils xz-utils >/dev/null
 cd /r
 apt-ftparchive packages pool >dists/stable/main/binary-amd64/Packages
@@ -103,12 +103,12 @@ apt-ftparchive -o APT::FTPArchive::Release::Origin=Phoenix -o APT::FTPArchive::R
 mv /tmp/Release dists/stable/Release
 chown -R "$OWNER" /r'
 log "rpm metadata (almalinux:9)"
-docker run --rm -v "$REPO/rpm:/r" -e OWNER="$OWNER" almalinux:9 bash -euo pipefail -c '
+docker run --rm -v "$REPO/rpm:/r" -e OWNER="$OWNER" almalinux:9@sha256:245f8aab832fe800aa42bdab5fad75ebbd8e0b4c9f24820a83c638b177857ae2 bash -euo pipefail -c '
 dnf -q -y install createrepo_c >/dev/null
 createrepo_c -q /r
 chown -R "$OWNER" /r'
 log "pacman metadata (archlinux)"
-docker run --rm -v "$REPO/arch:/r" -e OWNER="$OWNER" archlinux:base bash -euo pipefail -c '
+docker run --rm -v "$REPO/arch:/r" -e OWNER="$OWNER" archlinux:base@sha256:d4594bb2300cba11f41c2f27923eb56f63d9988909c402f9c95517d1e362c899 bash -euo pipefail -c '
 cd /r
 rm -f phoenix.db* phoenix.files*
 # .pkg.tar.zst since build 2026-11; older builds in the repo are .xz.

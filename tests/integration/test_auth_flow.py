@@ -1,31 +1,27 @@
 """
 Integration tests for the full authentication flow.
 
-Tests the LoginAPI → VPN key setup → VPN config save chain as it happens
-on actual login. All external HTTP calls are mocked.
+Tests the VPN key setup → VPN config save chain as it happens on actual
+login. All external HTTP calls are mocked.
 
 Flow:
 1. generate WireGuard keys (setup_vpn_keys)
-2. send_otp to backend
-3. verify_otp with public_key → receive vpn_config
-4. save_vpn_configuration → write .conf file to disk
-5. settings store auth.logged_in + auth.email
+2. save_vpn_configuration → write .conf file to disk
+3. settings store auth.logged_in + auth.email
+
+The OTP half of this chain was removed with plugins/login/api.py; sign-in
+now goes through OIDC (plugins/login/oidc.py, tests/unit/test_login_oidc.py).
 """
 import json
 import os
 import pytest
 from unittest.mock import MagicMock, patch
 
-from plugins.login.api import LoginAPI
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-@pytest.fixture()
-def api(isolated_settings):
-    return LoginAPI("https://test.resistine.work")
-
 
 @pytest.fixture()
 def server_vpn_config():
@@ -83,49 +79,6 @@ class TestWireguardKeySetup:
 
 # ===========================================================================
 # Step 2 & 3: OTP → verify → receive VPN config
-# ===========================================================================
-@pytest.mark.integration
-class TestOtpFlow:
-    @patch("plugins.login.api.requests.post")
-    def test_send_otp_then_verify_success(self, mock_post, api):
-        send_response = _mock_post({"status": "success", "message": "OTP sent"})
-        verify_response = _mock_post({
-            "status": "success",
-            "vpn_config": json.dumps({
-                "Interface": {"Address": "10.0.0.2", "DNS": ["10.0.0.53"]},
-                "Peer": {"PublicKey": "spk==", "AllowedIPs": ["0.0.0.0/0"], "Endpoint": "1.2.3.4:51820"},
-            }),
-        })
-        mock_post.side_effect = [send_response, verify_response]
-
-        ok1, _, _ = api.send_otp("user@example.com")
-        ok2, _, data = api.verify_otp("user@example.com", "123456", "clientPubKey==")
-
-        assert ok1 is True
-        assert ok2 is True
-        assert "vpn_config" in data
-
-    @patch("plugins.login.api.requests.post")
-    def test_wrong_otp_stops_flow(self, mock_post, api):
-        mock_post.return_value = _mock_post({"status": "failed", "message": "Invalid OTP"})
-        ok, msg, _ = api.verify_otp("user@example.com", "000000", "clientPubKey==")
-        assert ok is False
-
-    @patch("plugins.login.api.requests.post")
-    def test_verify_returns_vpn_config_string(self, mock_post, api, server_vpn_config):
-        mock_post.return_value = _mock_post({
-            "status": "success",
-            "vpn_config": json.dumps(server_vpn_config),
-        })
-        ok, _, data = api.verify_otp("user@example.com", "123456", "pubkey==")
-        assert ok is True
-        vpn_json = json.loads(data["vpn_config"])
-        assert "Interface" in vpn_json
-        assert "Peer" in vpn_json
-
-
-# ===========================================================================
-# Step 4: Save VPN config to disk
 # ===========================================================================
 @pytest.mark.integration
 class TestSaveVpnConfig:
@@ -206,67 +159,6 @@ class TestAuthSettingsPersistence:
 
 # ===========================================================================
 # Full end-to-end login chain (mocked network + disk)
-# ===========================================================================
-@pytest.mark.integration
-class TestFullLoginChain:
-    @patch("plugins.login.api.requests.post")
-    def test_full_chain_sends_public_key_to_verify(
-        self, mock_post, isolated_settings, monkeypatch, tmp_path, server_vpn_config
-    ):
-        monkeypatch.setattr(
-            "plugins.vpn.wireguard.vpn_functions_darwin.settings", isolated_settings
-        )
-        from plugins.vpn.wireguard.vpn_functions_darwin import setup_vpn_keys
-
-        # Step 1: Generate keys
-        public_key = setup_vpn_keys()
-        assert public_key is not None
-
-        # Step 2: Simulate verify_otp sending public_key
-        mock_post.return_value = _mock_post({
-            "status": "success",
-            "vpn_config": json.dumps(server_vpn_config),
-        })
-        api = LoginAPI("https://test.resistine.work")
-        ok, _, data = api.verify_otp("user@example.com", "123456", public_key)
-
-        assert ok is True
-        payload_sent = mock_post.call_args[1]["json"]
-        assert payload_sent["client_public_key"] == public_key
-
-    @patch("plugins.login.api.requests.post")
-    def test_full_chain_saves_vpn_config_on_success(
-        self, mock_post, isolated_settings, monkeypatch, tmp_path, server_vpn_config
-    ):
-        monkeypatch.setattr(
-            "plugins.vpn.wireguard.vpn_functions_darwin.settings", isolated_settings
-        )
-        from plugins.vpn.wireguard.vpn_functions_darwin import (
-            setup_vpn_keys,
-            save_vpn_configuration,
-        )
-
-        public_key = setup_vpn_keys()
-        mock_post.return_value = _mock_post({
-            "status": "success",
-            "vpn_config": json.dumps(server_vpn_config),
-        })
-        api = LoginAPI("https://test.resistine.work")
-        ok, _, data = api.verify_otp("user@example.com", "123456", public_key)
-        assert ok is True
-
-        with patch(
-            "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
-            return_value=str(tmp_path),
-        ):
-            path = save_vpn_configuration(data["vpn_config"])
-
-        assert path is not None
-        assert os.path.exists(path)
-
-
-# ===========================================================================
-# P1-A: VPN onboarding security guarantees
 # ===========================================================================
 @pytest.mark.integration
 @pytest.mark.security

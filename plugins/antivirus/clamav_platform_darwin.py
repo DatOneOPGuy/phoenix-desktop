@@ -744,6 +744,60 @@ def _launch_clamav_postinstall(db_source: str) -> tuple[bool, str]:
         return False, status_file, 0
 
 
+def _read_trusted_status(status_file: str):
+    """Load the postinstall status JSON, or None if it cannot be trusted.
+
+    The file lives in world-writable /tmp. The uuid in its name makes the path
+    unpredictable, but that is the only thing standing between us and a local
+    process planting a file here, so verify what we actually opened:
+
+    * O_NOFOLLOW — never traverse a symlink left in our place;
+    * O_NONBLOCK — opening a fifo read-only otherwise blocks until someone
+      writes to it, which would hang the caller before any check could run;
+    * regular file — rejects the fifo (and anything else) after the open;
+    * owned by root (the postinstall script runs elevated) or by us;
+    * not group- or world-writable.
+
+    A failure is indistinguishable from "not written yet": callers treat None
+    as "keep polling", which fails closed — the install is reported as
+    finished only on a status we trust.
+    """
+    import json
+    import stat as _stat
+
+    try:
+        fd = os.open(status_file, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+
+    try:
+        st = os.fstat(fd)
+        if not _stat.S_ISREG(st.st_mode):
+            logger.warning(f"ClamAV: {status_file} is not a regular file — ignoring")
+            return None
+        if st.st_uid not in (0, os.getuid()):
+            logger.warning(
+                f"ClamAV: {status_file} is owned by uid {st.st_uid} — ignoring"
+            )
+            return None
+        if st.st_mode & (_stat.S_IWGRP | _stat.S_IWOTH):
+            logger.warning(
+                f"ClamAV: {status_file} is group/world-writable — ignoring"
+            )
+            return None
+        with os.fdopen(fd, "r") as f:
+            fd = -1  # fdopen owns it now
+            return json.load(f)
+    except (json.JSONDecodeError, OSError, ValueError):
+        return None
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
 def _poll_setup_status(status_file: str) -> tuple[bool, bool, dict]:
     """Read the JSON status file written by the postinstall script.
 
@@ -755,10 +809,8 @@ def _poll_setup_status(status_file: str) -> tuple[bool, bool, dict]:
     """
     import json
 
-    try:
-        with open(status_file) as f:
-            data = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
+    data = _read_trusted_status(status_file)
+    if data is None:
         return False, False, {}
 
     status = data.get("status", "")

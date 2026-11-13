@@ -107,40 +107,6 @@ class TestWazuhArchMapping:
 
 
 # ===========================================================================
-# LoginAPI: works regardless of OS
-# ===========================================================================
-class TestLoginAPICrossPlatform:
-    @patch("plugins.login.api.requests.post")
-    def test_send_otp_cross_platform(self, mock_post):
-        mock_post.return_value = MagicMock(
-            ok=True,
-            status_code=200,
-            json=lambda: {"status": "success"},
-            text='{"status": "success"}',
-        )
-        from plugins.login.api import LoginAPI
-        api = LoginAPI("https://test.resistine.work")
-        ok, msg, data = api.send_otp("user@example.com")
-        assert ok is True
-
-    @patch("plugins.login.api.requests.post")
-    def test_verify_otp_uses_real_hostname(self, mock_post):
-        """hostname in payload should be the actual machine hostname, not hardcoded."""
-        import socket
-        mock_post.return_value = MagicMock(
-            ok=True,
-            status_code=200,
-            json=lambda: {"status": "success"},
-            text='{"status": "success"}',
-        )
-        from plugins.login.api import LoginAPI
-        api = LoginAPI("https://test.resistine.work")
-        api.verify_otp("user@example.com", "123456", "pubkey")
-        payload = mock_post.call_args[1]["json"]
-        assert payload["hostname"] == socket.gethostname()
-
-
-# ===========================================================================
 # WireGuard key generation: cross-platform cryptography
 # ===========================================================================
 class TestWireguardKeyCrossPlatform:

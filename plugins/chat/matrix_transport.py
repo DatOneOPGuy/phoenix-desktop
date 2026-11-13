@@ -49,6 +49,9 @@ TURN_KEY = "net.resisti.turn"
 REQUEST_KEY = "exposed.phoenix.request"
 DEFAULT_BOT = "@secagent:phoenix.exposed"
 _NS = "chat"
+# settings key: {bot_device_id: ed25519} pinned on first use. See
+# MatrixTransport._pinned_bot_devices.
+_PINNED_DEVICES_KEY = "matrix_bot_device_keys"
 
 _READY_TIMEOUT = 60       # login + first sync + DM ready
 _SEND_TIMEOUT = 30
@@ -564,7 +567,7 @@ class MatrixService:
                     break
                 await asyncio.sleep(0.25)
             room = client.rooms.get(room_id)
-            if room is not None and room.encrypted and self.bot in room.users:
+            if room is not None and room.encrypted and self._is_private_dm(room):
                 self.room_id = room_id
                 return
             logger.info(f"[CHAT-MATRIX] saved room {room_id} unusable; creating a new DM")
@@ -597,6 +600,119 @@ class MatrixService:
         settings.set(_NS, "matrix_room_bot", self.bot)
         self.room_id = room_id
 
+    def _is_private_dm(self, room) -> bool:
+        """True only if the room's membership is exactly {this user, the bot}.
+
+        A homeserver admin can add a member to a room we already trust and read
+        everything sent afterwards, so adopting a saved room on "the bot is in
+        it" alone is not enough — the membership has to be exactly the two
+        parties. Invited-but-not-joined members count: they can join at any
+        time and receive keys we have already shared.
+        """
+        joined = set(getattr(room, "users", {}) or {})
+        invited = set(getattr(room, "invited_users", {}) or {})
+        members = joined | invited
+        expected = {self.user_id, self.bot}
+        if members != expected:
+            extra = members - expected
+            if extra:
+                logger.warning(
+                    f"[CHAT-MATRIX] room {room.room_id} has unexpected members "
+                    f"({', '.join(sorted(extra))}) — refusing to use it"
+                )
+            return False
+        return True
+
+    async def _pinned_bot_devices(self) -> None:
+        """TOFU-pin the bot's device keys and encrypt only to pinned devices.
+
+        Without this the client encrypts to whatever devices the homeserver
+        says belong to the bot, so the server operator can attach a device of
+        their own and read every prompt — exactly what E2EE is meant to stop.
+
+        Policy:
+          * first run pins whatever the bot currently has (trust on first use);
+          * a *changed* ed25519 key for an already-pinned device id is treated
+            as an attack and fails hard — a device id's key is immutable, so
+            this cannot happen benignly;
+          * a *new* device id is not trusted: it is blacklisted so no keys are
+            shared with it, and the user is warned. Messages still reach the
+            pinned devices, so a legitimate bot re-provision degrades to a
+            visible warning rather than silent exposure.
+        """
+        from nio.crypto import TrustState  # noqa: F401  (documents intent)
+
+        client = self._client
+        if client.should_query_keys:
+            await client.keys_query()
+
+        devices = list(client.device_store.active_user_devices(self.bot))
+        if not devices:
+            raise MatrixTransportError(
+                "The assistant has no encryption devices available. "
+                "It may be offline — try again shortly."
+            )
+
+        pinned = settings.get(_NS, _PINNED_DEVICES_KEY) or {}
+        if not isinstance(pinned, dict):
+            pinned = {}
+
+        rogue = []
+        for device in devices:
+            known = pinned.get(device.id)
+            if known and known != device.ed25519:
+                # A device id never changes its key. This is a swap.
+                raise MatrixTransportError(
+                    f"The assistant's encryption key for device {device.id} "
+                    "changed. This should never happen and may mean the "
+                    "server is impersonating the assistant. Chat is blocked "
+                    "until the device is trusted again."
+                )
+            if known:
+                if not device.verified:
+                    client.verify_device(device)
+            elif pinned:
+                # Pins exist and this is not one of them: do not share keys.
+                if not device.blacklisted:
+                    client.blacklist_device(device)
+                rogue.append(device.id)
+
+        if not pinned:
+            settings.set(
+                _NS,
+                _PINNED_DEVICES_KEY,
+                {d.id: d.ed25519 for d in devices},
+            )
+            for device in devices:
+                if not device.verified:
+                    client.verify_device(device)
+            logger.info(
+                f"[CHAT-MATRIX] pinned {len(devices)} device(s) for {self.bot}"
+            )
+            return
+
+        if rogue:
+            logger.warning(
+                f"[CHAT-MATRIX] {self.bot} has unpinned device(s) "
+                f"{', '.join(sorted(rogue))} — not sharing keys with them"
+            )
+
+        if not any(d.verified for d in devices):
+            raise MatrixTransportError(
+                "None of the assistant's current devices are trusted. If the "
+                "assistant was reinstalled, clear the pinned devices in "
+                "Settings to trust it again."
+            )
+
+    def clear_pinned_devices(self) -> None:
+        """Forget the pinned bot devices so the next send re-pins (TOFU).
+
+        Needed after a legitimate bot re-provision. Exposed deliberately so
+        re-trusting is an explicit user action, never an automatic one.
+        """
+        settings.set(_NS, _PINNED_DEVICES_KEY, {})
+        logger.info(f"[CHAT-MATRIX] cleared pinned devices for {self.bot}")
+
     async def send_prompt(self, text: str, session: Optional[str]) -> str:
         from nio import RoomSendResponse
 
@@ -604,12 +720,14 @@ class MatrixService:
         room = client.rooms.get(self.room_id)
         if room is not None and not room.members_synced:
             await client.joined_members(self.room_id)
-        if client.should_query_keys:
-            await client.keys_query()
+        await self._pinned_bot_devices()
         content = {"msgtype": "m.text", "body": text}
         if session:
             content[REQUEST_KEY] = {"session": session}
-        resp = await client.room_send(self.room_id, "m.room.message", content, ignore_unverified_devices=True)
+        # No ignore_unverified_devices: _pinned_bot_devices has verified the
+        # pinned devices and blacklisted anything else, so nio shares keys with
+        # exactly the devices we trust.
+        resp = await client.room_send(self.room_id, "m.room.message", content)
         if not isinstance(resp, RoomSendResponse):
             raise MatrixTransportError(f"Could not send the message ({resp}).")
         return resp.event_id
